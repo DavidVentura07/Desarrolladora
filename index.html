@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Directorio de proveedores · Galitha</title>
+<meta name="description" content="Directorio interno de proveedores de Galitha — uso interno.">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#F1F2F8">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 190 190'%3E%3Cg fill='%23153588'%3E%3Crect width='95' height='24'/%3E%3Crect y='35' width='95' height='24'/%3E%3Crect y='71' width='95' height='24'/%3E%3Cpath d='M0 113h78v77H47v-47H0z'/%3E%3Crect y='159' width='32' height='31'/%3E%3Cpath fill-rule='evenodd' d='M111 0h79v78h-79zM134 24v31h32V24z'/%3E%3Crect x='95' y='95' width='95' height='24'/%3E%3Crect x='95' y='130' width='95' height='24'/%3E%3Crect x='95' y='167' width='95' height='23'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400..800;1,400..800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="is-loading">
+
+<!-- Preloader: el isotipo se arma módulo por módulo (solo la primera vez por sesión) -->
+<div id="loader" aria-hidden="true">
+  <div class="loader-mark"></div>
+  <div class="loader-meta">
+    <span class="mono">Directorio de proveedores</span>
+    <span class="mono loader-count">000</span>
+  </div>
+</div>
+
+<!-- Cortina de transición entre páginas: franjas horizontales con brillo -->
+<div id="curtain" aria-hidden="true">
+  <i></i><i></i><i></i><i></i><i></i>
+  <div class="curtain-mark"></div>
+</div>
+
+<div class="shell">
+  <!-- Barra lateral flotante (escritorio) -->
+  <aside class="side" aria-label="Plataforma">
+    <a href="#/" class="side-logo" aria-label="Galitha, directorio de proveedores"></a>
+    <p class="side-app">Plataforma interna</p>
+    <nav class="side-nav" aria-label="Módulos">
+      <a href="#/" data-route=""><span data-ico="users"></span><span>Proveedores</span><b data-count></b></a>
+      <a href="#/listas" data-route="listas"><span data-ico="listas"></span><span>Listas y opciones</span></a>
+      <a href="#/datos" data-route="datos"><span data-ico="db"></span><span>Respaldo y datos</span></a>
+    </nav>
+    <div class="side-soon">
+      <p>Muy pronto</p>
+      <span><i data-ico="folder"></i>Proyectos</span>
+      <span><i data-ico="user"></i>Clientes</span>
+      <span><i data-ico="shield"></i>Usuarios y permisos</span>
+    </div>
+    <div class="side-foot">
+      <a href="#/datos" class="backup" data-backup></a>
+      <span class="side-ver">v0.2 · local</span>
+    </div>
+  </aside>
+
+  <!-- Barra superior (móvil) -->
+  <header class="topbar">
+    <a href="#/" class="top-logo" aria-label="Galitha, inicio"></a>
+    <span class="top-title">Proveedores</span>
+    <button class="nav-burger" aria-label="Abrir menú" aria-expanded="false"><i></i><i></i></button>
+  </header>
+
+  <!-- Barra superior (escritorio) -->
+  <header class="deskbar">
+    <span class="fecha"><span data-ico="cal"></span><span data-fecha></span></span>
+    <div class="deskbar-r">
+      <button class="btn btn--solid" type="button" data-act="nuevo"><span data-ico="plus"></span><span>Nuevo proveedor</span></button>
+    </div>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+</div>
+
+<!-- Menú móvil -->
+<div id="menu" aria-hidden="true">
+  <nav>
+    <a href="#/" data-route=""><small>01</small>Proveedores</a>
+    <a href="#/listas" data-route="listas"><small>02</small>Listas</a>
+    <a href="#/datos" data-route="datos"><small>03</small>Respaldo</a>
+  </nav>
+  <div class="menu-foot"><span>Galitha · Directorio de proveedores</span><span data-backup-text></span></div>
+</div>
+
+<!-- Barra inferior (móvil) -->
+<nav class="tabbar" aria-label="Navegación">
+  <a href="#/" data-route=""><span data-ico="users"></span>Proveedores</a>
+  <button class="tab-add" type="button" data-act="nuevo" aria-label="Nuevo proveedor"><span data-ico="plus"></span></button>
+  <a href="#/datos" data-route="datos"><span data-ico="db"></span>Respaldo</a>
+</nav>
+
+<!-- Panel lateral para formularios -->
+<div id="drawer" aria-hidden="true">
+  <div class="dr-scrim" data-close></div>
+  <aside class="dr-panel" role="dialog" aria-modal="true" aria-labelledby="dr-title"></aside>
+</div>
+
+<!-- Diálogo de confirmación -->
+<div id="modal" aria-hidden="true">
+  <div class="md-scrim"></div>
+  <div class="md-box" role="alertdialog" aria-modal="true" aria-labelledby="md-title"></div>
+</div>
+
+<div class="toast" role="status" aria-live="polite"></div>
+
+<script src="js/catalogos.js"></script>
+<script src="js/store.js"></script>
+<script src="js/ejemplo.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
