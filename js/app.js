@@ -205,6 +205,7 @@
       el.innerHTML = `<i></i><span><b>${esc(r.label)}</b><small class="mono">${esc(r.text)}</small></span>`;
     });
     $$('[data-backup-text]').forEach(el => { el.textContent = `${r.label} · ${r.text}`; });
+    MODS.forEach(m => m.chrome && m.chrome());
   }
 
   /* =========================================================
@@ -615,6 +616,7 @@
               `<button class="tbtn tbtn--sm" data-act="nuevo-contacto">${I.plus}<span>Agregar contacto</span></button>`, 180)}
 
             ${panel('03', 'Obras en las que ha participado', p.obras.length ? `<ul class="obras">${p.obras.map(o => `<li>${esc(o)}</li>`).join('')}</ul>` : nada('Sin obras registradas.'), '', 220)}
+            ${MODS.map(m => (m.fichaProveedor ? m.fichaProveedor(p) : '')).join('')}
           </div>
 
           <aside class="d-side">
@@ -716,6 +718,7 @@
                 <b>Arrastra aquí un archivo JSON</b>
                 <span class="muted">o haz clic para elegirlo</span>
               </label>
+              <p class="muted small" style="margin:10px 0 0">Acepta respaldos del directorio y de requisiciones y compras.</p>
               <div id="import-res"></div>`, '', 180)}
 
             ${panel('04', 'Pruebas y limpieza', `
@@ -726,6 +729,7 @@
               </div>`, '', 220)}
           </div>
         </div>
+        ${MODS.map(m => (m.datosPanel ? m.datosPanel() : '')).join('')}
       </section>`;
 
     return {
@@ -733,6 +737,7 @@
       html,
       bind(root) {
         pendienteImport = null;
+        MODS.forEach(m => m.datosBind && m.datosBind(root));
         const file = $('#file', root), drop = $('#drop', root);
         file.addEventListener('change', () => file.files[0] && leerArchivo(file.files[0]));
         ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
@@ -772,6 +777,8 @@
       let data;
       try { data = JSON.parse(reader.result); }
       catch { out.innerHTML = `<p class="warn">${I.alert}El archivo no es un JSON válido.</p>`; return; }
+      const mod = MODS.find(m => m.importa && m.importa(data));
+      if (mod) { pendienteImport = null; mod.importarArchivo(data, f.name, out); return; }
       const a = S.analizar(data);
       if (!a.ok) { out.innerHTML = `<p class="warn">${I.alert}${esc(a.error)}</p>`; return; }
       pendienteImport = a;
@@ -1085,6 +1092,7 @@
 
   function openDrawer(title, sub, body, onSubmit) {
     lastFocus = document.activeElement;
+    drPanel.classList.remove('wide');
     drPanel.innerHTML = `
       <form class="dr-form" novalidate>
         <header class="dr-h">
@@ -1116,6 +1124,18 @@
     document.body.classList.add('drawer-open');
     drPanel.scrollTop = 0;
     setTimeout(() => { const f = $('.dr-b .in', form); if (f && !mobileMQ.matches) f.focus(); }, reduced ? 0 : 450);
+  }
+  // Panel con contenido libre (módulos): el módulo pone su propio pie y botones
+  function openPanel(html, { wide = false } = {}, bind) {
+    lastFocus = document.activeElement;
+    drPanel.classList.toggle('wide', wide);
+    drPanel.innerHTML = html;
+    dirty = false;
+    drawer.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('drawer-open');
+    drPanel.scrollTop = 0;
+    if (bind) bind(drPanel);
+    setTimeout(() => { const f = $('.dr-b .in:not([type=file]):not([disabled])', drPanel); if (f && !mobileMQ.matches) f.focus(); }, reduced ? 0 : 450);
   }
   async function closeDrawer(force) {
     if (!document.body.classList.contains('drawer-open')) return;
@@ -1502,6 +1522,32 @@
     return { page, id: dec, key: raw };
   }
   const pages = { '': pageLista, p: pageDetalle, datos: pageDatos, listas: pageListas };
+  // Ruta → elemento activo del menú, título móvil y acción principal (botón de la barra superior y "+" del celular)
+  const NAV = { p: '' };
+  const TITULOS = { datos: 'Respaldo', listas: 'Listas' };
+  const ACCIONES = { '': { label: 'Nuevo proveedor', act: 'nuevo' } };
+
+  /* ---------- Módulos (requisiciones, compras…) ----------
+     Cada módulo se carga antes que app.js y se anota en window.GALITHA_MODULOS
+     como una función que recibe esta API y devuelve sus páginas y ganchos. */
+  const API = {
+    esc, norm, digits, pad, ico, I, ARR, markSVG, logoSVG, today, mobileMQ, reduced,
+    toast, confirmar, rerender: () => rerender(), openPanel, closeDrawer, markDirty, descargar, panel, dl,
+    refresh: () => refresh(), proveedores: () => DATA, listas: () => LISTAS, nombreProveedor: nombre, Store: S
+  };
+  const MODS = (window.GALITHA_MODULOS || []).map(f => f(API)).filter(Boolean);
+  MODS.forEach(m => {
+    Object.assign(pages, m.pages || {}); Object.assign(NAV, m.nav || {});
+    Object.assign(TITULOS, m.titulos || {}); Object.assign(ACCIONES, m.acciones || {});
+  });
+  function accionPrincipal(route) {
+    const a = ACCIONES[route] || ACCIONES[''];
+    $$('[data-main-act]').forEach(b => {
+      b.dataset.act = a.act;
+      b.setAttribute('aria-label', a.label);
+      const t = $('[data-main-label]', b); if (t) t.textContent = a.label;
+    });
+  }
 
   function reveal(root) {
     requestAnimationFrame(() => requestAnimationFrame(() => $$('.rv:not(.is-in)', root).forEach(e => e.classList.add('is-in'))));
@@ -1512,11 +1558,12 @@
     const view = $('#view');
     const y = scrollY;
     view.innerHTML = out.html;
-    document.title = `${out.title} · Directorio de proveedores Galitha`;
-    const route = r.page === 'p' ? '' : (pages[r.page] ? r.page : '');
+    document.title = `${out.title} · Galitha`;
+    const route = r.page in NAV ? NAV[r.page] : (pages[r.page] ? r.page : '');
     $$('.side-nav a, #menu nav a, .tabbar a').forEach(a => a.classList.toggle('active', a.dataset.route === route));
-    $('.top-title').textContent = { datos: 'Respaldo', listas: 'Listas' }[route] || 'Proveedores';
+    $('.top-title').textContent = TITULOS[route] || 'Proveedores';
     document.body.dataset.page = r.page === 'p' ? 'ficha' : (route || 'lista');
+    accionPrincipal(route);
     if (out.bind) out.bind(view.firstElementChild);
     if (keepScroll) { scrollTo(0, y); $$('.rv', view).forEach(e => e.classList.add('is-in')); }
     else { scrollTo(0, 0); reveal(view); }
@@ -1581,6 +1628,7 @@
       const a = act.dataset.act;
       if (a === 'nuevo') { await refresh(); formProveedor(); }
       if (a === 'ejemplo') cargarEjemplo();
+      MODS.forEach(m => m.onAct && m.onAct(a, act));
       if (a === 'limpiar') {
         Object.assign(F, FDEF, { sort: F.sort }); saveF();
         const q = $('#q'); if (q) q.value = '';
@@ -1611,7 +1659,7 @@
   });
 
   // Si otra pestaña modifica los datos, se refleja aquí al volver
-  addEventListener('storage', e => { if (e.key && e.key.startsWith('galitha.directorio') && !document.body.classList.contains('drawer-open')) rerender(); });
+  addEventListener('storage', e => { if (e.key && (e.key.startsWith('galitha.directorio') || e.key.startsWith('galitha.requisiciones')) && !document.body.classList.contains('drawer-open')) rerender(); });
 
   /* =========================================================
      ARRANQUE

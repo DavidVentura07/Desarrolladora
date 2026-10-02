@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Directorio de proveedores · Galitha</title>
-<meta name="description" content="Directorio interno de proveedores de Galitha — uso interno.">
+<title>Galitha · Plataforma interna</title>
+<meta name="description" content="Plataforma interna de Galitha: proveedores, requisiciones de obra y compras — uso interno.">
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#F1F2F8">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 190 190'%3E%3Cg fill='%23153588'%3E%3Crect width='95' height='24'/%3E%3Crect y='35' width='95' height='24'/%3E%3Crect y='71' width='95' height='24'/%3E%3Cpath d='M0 113h78v77H47v-47H0z'/%3E%3Crect y='159' width='32' height='31'/%3E%3Cpath fill-rule='evenodd' d='M111 0h79v78h-79zM134 24v31h32V24z'/%3E%3Crect x='95' y='95' width='95' height='24'/%3E%3Crect x='95' y='130' width='95' height='24'/%3E%3Crect x='95' y='167' width='95' height='23'/%3E%3C/g%3E%3C/svg%3E">
@@ -37,18 +37,21 @@
     <p class="side-app">Plataforma interna</p>
     <nav class="side-nav" aria-label="Módulos">
       <a href="#/" data-route=""><span data-ico="users"></span><span>Proveedores</span><b data-count></b></a>
+      <a href="#/requisiciones" data-route="requisiciones"><span data-ico="clip"></span><span>Requisiciones</span><b data-rcount="req"></b></a>
+      <a href="#/compras" data-route="compras"><span data-ico="receipt"></span><span>Compras y facturas</span><b data-rcount="pend"></b></a>
+      <a href="#/obras" data-route="obras"><span data-ico="building"></span><span>Obras</span></a>
       <a href="#/listas" data-route="listas"><span data-ico="listas"></span><span>Listas y opciones</span></a>
       <a href="#/datos" data-route="datos"><span data-ico="db"></span><span>Respaldo y datos</span></a>
     </nav>
     <div class="side-soon">
       <p>Muy pronto</p>
-      <span><i data-ico="folder"></i>Proyectos</span>
+      <span><i data-ico="chart"></i>Erogaciones y avance</span>
       <span><i data-ico="user"></i>Clientes</span>
       <span><i data-ico="shield"></i>Usuarios y permisos</span>
     </div>
     <div class="side-foot">
       <a href="#/datos" class="backup" data-backup></a>
-      <span class="side-ver">v0.2 · local</span>
+      <span class="side-ver">v0.3 · local</span>
     </div>
   </aside>
 
@@ -63,7 +66,9 @@
   <header class="deskbar">
     <span class="fecha"><span data-ico="cal"></span><span data-fecha></span></span>
     <div class="deskbar-r">
-      <button class="btn btn--solid" type="button" data-act="nuevo"><span data-ico="plus"></span><span>Nuevo proveedor</span></button>
+      <!-- "Ver como": vista previa de permisos hasta que existan cuentas (solo en requisiciones, compras y obras) -->
+      <div class="seg rol" role="group" aria-label="Ver como" data-rol-switch></div>
+      <button class="btn btn--solid" type="button" data-act="nuevo" data-main-act><span data-ico="plus"></span><span data-main-label>Nuevo proveedor</span></button>
     </div>
   </header>
 
@@ -74,17 +79,21 @@
 <div id="menu" aria-hidden="true">
   <nav>
     <a href="#/" data-route=""><small>01</small>Proveedores</a>
-    <a href="#/listas" data-route="listas"><small>02</small>Listas</a>
-    <a href="#/datos" data-route="datos"><small>03</small>Respaldo</a>
+    <a href="#/requisiciones" data-route="requisiciones"><small>02</small>Requisiciones</a>
+    <a href="#/compras" data-route="compras"><small>03</small>Compras</a>
+    <a href="#/obras" data-route="obras"><small>04</small>Obras</a>
+    <a href="#/listas" data-route="listas"><small>05</small>Listas</a>
+    <a href="#/datos" data-route="datos"><small>06</small>Respaldo</a>
   </nav>
-  <div class="menu-foot"><span>Galitha · Directorio de proveedores</span><span data-backup-text></span></div>
+  <div class="menu-foot"><span>Galitha · Plataforma interna</span><span data-backup-text></span><div class="seg rol" role="group" aria-label="Ver como" data-rol-switch></div></div>
 </div>
 
 <!-- Barra inferior (móvil) -->
 <nav class="tabbar" aria-label="Navegación">
   <a href="#/" data-route=""><span data-ico="users"></span>Proveedores</a>
-  <button class="tab-add" type="button" data-act="nuevo" aria-label="Nuevo proveedor"><span data-ico="plus"></span></button>
-  <a href="#/datos" data-route="datos"><span data-ico="db"></span>Respaldo</a>
+  <a href="#/requisiciones" data-route="requisiciones"><span data-ico="clip"></span>Requisiciones</a>
+  <button class="tab-add" type="button" data-act="nuevo" data-main-act aria-label="Nuevo proveedor"><span data-ico="plus"></span></button>
+  <a href="#/compras" data-route="compras"><span data-ico="receipt"></span>Compras</a>
 </nav>
 
 <!-- Panel lateral para formularios -->
@@ -100,10 +109,16 @@
 </div>
 
 <div class="toast" role="status" aria-live="polite"></div>
+<input type="file" id="filepick" hidden>
+
+<!-- Formato de impresión (PDF) de la requisición: réplica del formato en papel -->
+<div id="print" aria-hidden="true"></div>
 
 <script src="js/catalogos.js"></script>
 <script src="js/store.js"></script>
 <script src="js/ejemplo.js"></script>
+<script src="js/store-req.js"></script>
+<script src="js/requisiciones.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

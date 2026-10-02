@@ -1,0 +1,1310 @@
+/* =========================================================
+   GALITHA · Módulo de requisiciones de obra, compras y obras
+   Se registra en window.GALITHA_MODULOS; app.js lo arranca con
+   su API (panel lateral, avisos, router, directorio). Los datos
+   pasan siempre por window.StoreReq.
+
+   Flujo de cada material:
+   Requisitado → Autorizado → Cotizado → Facturado → Pagado → Recibido en obra
+   - El residente crea y edita la requisición de su obra (ordinaria el lunes, extraordinarias cuando haga falta).
+   - Coordinación autoriza; compras sube la cotización elegida, la factura (PDF + XML), el pago.
+   - Al recibir, se sube la foto de la remisión firmada.
+   Mientras no haya servidor: los archivos no se guardan (solo su nombre),
+   el XML sí se lee en el navegador y los avisos al residente son simulados.
+   ========================================================= */
+(window.GALITHA_MODULOS = window.GALITHA_MODULOS || []).push(api => {
+  const R = window.StoreReq;
+  const { esc, norm, ico, I, toast } = api;
+  const $ = (s, c = document) => c.querySelector(s);
+  const $$ = (s, c = document) => [...c.querySelectorAll(s)];
+  const pad = n => String(n).padStart(2, '0');
+  const ls = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* preferencia no crítica */ } }
+  };
+
+  /* ---------- Íconos propios del módulo (se suman a los de la app) ---------- */
+  Object.assign(I, {
+    clip: ico('<rect x="5" y="4.5" width="14" height="16.5" rx="2"/><path d="M9 4.5V3.5h6v1M9 10h6M9 13.5h6M9 17h3.5"/>'),
+    receipt: ico('<path d="M6 3h12v18l-2-1.4-2 1.4-2-1.4-2 1.4-2-1.4L6 21z"/><path d="M9 8h6M9 11.5h6M9 15h3.5"/>'),
+    building: ico('<path d="M4 21V5.5L12 3v18M12 8.5l8 2.5v10M3 21h18"/><path d="M7.5 8.5v.5M7.5 12v.5M7.5 15.5v.5M15.5 13.5v.5M15.5 17v.5"/>'),
+    chart: ico('<path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>'),
+    xml: ico('<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M10 12l-2 2 2 2M14 12l2 2-2 2"/>'),
+    cash: ico('<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v5M18 9.5v5"/>'),
+    check: ico('<path d="M4.5 12.5l4.5 4.5 10.5-11"/>'),
+    truck: ico('<path d="M3 6.5h11v9.5H3zM14 9.5h4l3 3.2V16h-7"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17.5" cy="17.5" r="1.8"/>'),
+    camera: ico('<path d="M4 8h3.5L9 5.5h6L16.5 8H20v11H4z"/><circle cx="12" cy="13.2" r="3.4"/>'),
+    upload: ico('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>'),
+    print: ico('<path d="M7 9V3.5h10V9M7 17H4.5V9h15v8H17"/><rect x="7" y="13.5" width="10" height="7"/>'),
+    left: ico('<path d="M15 5l-7 7 7 7"/>'),
+    right: ico('<path d="M9 5l7 7-7 7"/>'),
+    x: ico('<circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/>'),
+    okc: ico('<circle cx="12" cy="12" r="9"/><path d="M8 12.3l2.8 2.8L16.2 9.5"/>'),
+    bell: ico('<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>'),
+    office: ico('<rect x="3.5" y="7" width="17" height="12.5" rx="2"/><path d="M9 7V5h6v2M3.5 12.5h17"/>'),
+    clock: ico('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>')
+  });
+  I.up = I.up || I.upload;
+  const icoSz = (k, px) => I[k].replace('class="ico"', `class="ico" style="width:${px}px;height:${px}px"`);
+
+  /* ---------- Números y fechas ---------- */
+  const MXN = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
+  const money = n => MXN.format(+n || 0);
+  const moneyK = n => (!n ? '$0' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1) + ' M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + ' k' : money(n));
+  const qty = n => Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 3 });
+  const toDate = s => {
+    if (!s) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(s);
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)) : null;
+  };
+  const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  const MES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  const DIA = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+  const fDate = s => { const d = toDate(s); return d ? `${d.getDate()} ${MES[d.getMonth()].slice(0, 3)}` : '—'; };
+  const fDateL = s => { const d = toDate(s); return d ? `${DIA[d.getDay()]} ${d.getDate()} ${MES[d.getMonth()].slice(0, 3)} ${d.getFullYear()}` : '—'; };
+  const fDateT = s => {
+    const d = toDate(s); if (!d) return '—';
+    let h = d.getHours(); const ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12;
+    return `${DIA[d.getDay()]} ${d.getDate()} ${MES[d.getMonth()].slice(0, 3)}, ${h}:${pad(d.getMinutes())} ${ap}`;
+  };
+  const ddmmyy = s => { const d = toDate(s); return d ? `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}` : ''; };
+  const nowStr = () => { const d = new Date(); return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const today = () => ymd(new Date());
+  const localISO = iso => { const d = new Date(iso); return isNaN(d) ? '' : `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+  // Semana ISO (lunes a domingo). El corte del formato en papel va de lunes a sábado.
+  function isoWeek(dt) {
+    const d = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+    const day = d.getUTCDay() || 7; d.setUTCDate(d.getUTCDate() + 4 - day);
+    const y0 = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    return { anio: d.getUTCFullYear(), semana: Math.ceil(((d - y0) / 864e5 + 1) / 7) };
+  }
+  function lunes(anio, semana) {
+    const s = new Date(anio, 0, 4); const day = s.getDay() || 7;
+    return addDays(s, -day + 1 + (semana - 1) * 7);
+  }
+  const wkAdd = (w, n) => isoWeek(addDays(lunes(w.anio, w.semana), n * 7));
+  const wkKey = w => w.anio * 100 + w.semana;
+  const wkRange = w => { const l = lunes(w.anio, w.semana), s = addDays(l, 5); return `${l.getDate()} ${MES[l.getMonth()].slice(0, 3)} – ${s.getDate()} ${MES[s.getMonth()].slice(0, 3)} ${s.getFullYear()}`; };
+  // "DEL 28 AL 03 DE OCTUBRE 2026", igual que el formato en papel
+  const corte = w => { const l = lunes(w.anio, w.semana), s = addDays(l, 5); return `DEL ${pad(l.getDate())} AL ${pad(s.getDate())} DE ${MES[s.getMonth()].toUpperCase()} ${s.getFullYear()}`; };
+  const hoyWk = () => isoWeek(new Date());
+
+  /* ---------- Estados de un material ---------- */
+  const EST = [
+    { id: 'requisitado', label: 'Requisitado', ico: 'clip' },
+    { id: 'autorizado', label: 'Autorizado', ico: 'shield' },
+    { id: 'cotizado', label: 'Cotizado', ico: 'file' },
+    { id: 'facturado', label: 'Facturado', ico: 'receipt' },
+    { id: 'pagado', label: 'Pagado', ico: 'check' },
+    { id: 'recibido', label: 'Recibido en obra', ico: 'truck' }
+  ];
+  const estIdx = id => EST.findIndex(e => e.id === id);
+  const st = (id, sm) => { const e = EST.find(x => x.id === id) || EST[0]; return `<span class="st st--${e.id}${sm ? ' st--sm' : ''}">${I[e.ico]}${esc(e.label)}</span>`; };
+  const UNIDADES = ['PZA', 'TON', 'KG', 'BULTO', 'SACO', 'CUBETAS', 'M3', 'M2', 'ML', 'LT', 'ROLLO', 'JGO', 'SEM', 'SERV'];
+
+  /* ---------- Datos: copia de trabajo que se guarda con StoreReq.guardar ---------- */
+  let D = R.snapshot();
+  const cargar = () => { D = R.snapshot(); return D; };
+  const toca = x => { if (x) x.actualizadoEn = new Date().toISOString(); };
+  async function guardar() {
+    try { await R.guardar(D); cargar(); api.refresh(); return true; }
+    catch (e) { toast('No se pudo guardar: ' + e.message); cargar(); return false; }
+  }
+  const obra = id => D.obras.find(o => o.id === id);
+  const req = id => D.requisiciones.find(r => r.id === id);
+  const compra = id => (id ? D.compras.find(c => c.id === id) : null);
+  const compraEstado = c => (c.remision ? 'recibido' : c.pago ? 'pagado' : c.factura ? 'facturado' : 'cotizado');
+  function estado(r, p) {
+    if (!r.autorizadaEn) return 'requisitado';
+    const c = compra(p.compraId);
+    return c ? compraEstado(c) : 'autorizado';
+  }
+  const suministro = (r, p) => p.fechaSuministro || r.fechaSuministro;
+  const entrega = p => { const c = compra(p.compraId); return c ? (c.entregas && c.entregas[p.id]) || c.fechaEntrega : ''; };
+  const stats = r => { const s = {}; EST.forEach(e => { s[e.id] = 0; }); r.partidas.forEach(p => { s[estado(r, p)]++; }); return s; };
+  const comprasDe = r => D.compras.filter(c => c.requisicionId === r.id);
+  const montoCompra = c => (c.factura ? c.factura.total : c.cotizacion ? c.cotizacion.monto : 0);
+  const montoReq = r => comprasDe(r).reduce((a, c) => a + montoCompra(c), 0);
+  const seguros = s => s.pagado + s.recibido;
+  function findPartida(pid) { for (const r of D.requisiciones) { const p = r.partidas.find(x => x.id === pid); if (p) return p; } return null; }
+
+  // Liga con el directorio: por id (si se eligió del directorio) o por nombre
+  function enDirectorio(c) {
+    const DIR = api.proveedores();
+    if (c.proveedor.id) { const p = DIR.find(x => x.id === c.proveedor.id); if (p) return p; }
+    const n = norm(c.proveedor.nombre); if (!n) return null;
+    return DIR.find(p => { const a = norm(p.nombreComercial || p.razonSocial); return a && (a === n || (a.length > 3 && n.includes(a)) || (n.length > 3 && a.includes(n))); })
+      || (c.proveedor.rfc ? DIR.find(p => p.rfc && p.rfc === c.proveedor.rfc) : null) || null;
+  }
+  const iniciales = s => String(s || '').replace(/\(.*?\)|S\.?A\.?|C\.?V\.?|DE /gi, ' ').trim().split(/\s+/).filter(w => /^[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(w)).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '·';
+  const tono = s => 't' + ([...String(s)].reduce((a, ch) => a + ch.charCodeAt(0), 0) % 5);
+
+  /* ---------- "Ver como" (vista previa de permisos hasta que haya cuentas) ----------
+     "admin" = oficina (todo); "res:<obraId>" = residente de esa obra (solo su obra) */
+  let ROL = ls.get('galitha.rol', 'admin');
+  const esAdmin = () => !String(ROL).startsWith('res:');
+  const obraActivaDefault = () => (D.obras.find(o => o.estatus !== 'cerrada') || D.obras[0] || {}).id || '';
+  const residenteObra = () => { const id = String(ROL).slice(4); return obra(id) ? id : obraActivaDefault(); };
+  const visibleObra = id => esAdmin() || id === residenteObra();
+  const yo = () => (esAdmin() ? 'Oficina' : ((obra(residenteObra()) || {}).residente || {}).nombre || 'Residente');
+  const ROLES = () => `<button type="button" data-rol="admin" aria-pressed="${esAdmin()}" title="Ver como oficina">${I.office}<span>Oficina</span></button><button type="button" data-rol="res" aria-pressed="${!esAdmin()}" title="Ver como residente">${I.user}<span>Residente</span></button>`;
+  function setRol(v) {
+    ROL = v === 'admin' ? 'admin' : 'res:' + (v.startsWith('res:') ? v.slice(4) : residenteObra());
+    ls.set('galitha.rol', ROL);
+    pintarRol();
+    const o = obra(residenteObra());
+    toast(esAdmin() ? 'Viendo como oficina: autoriza, registra cotizaciones, facturas y pagos.' : `Viendo como residente de ${o ? o.nombre : 'la obra'}: crea requisiciones y sube remisiones.`);
+    api.rerender();
+  }
+  function pintarRol() {
+    $$('[data-rol-switch]').forEach(g => {
+      g.innerHTML = ROLES();
+      $$('[data-rol]', g).forEach(b => b.addEventListener('click', () => setRol(b.dataset.rol)));
+    });
+  }
+
+  /* ---------- Estado de la interfaz (por sesión) ---------- */
+  const UI = Object.assign({ wk: null, obra: '', tipo: 'todas', cObra: '', cWk: '', cEst: 'todas', q: '', chObra: '' },
+    (() => { try { return JSON.parse(sessionStorage.getItem('galitha.req.ui')) || {}; } catch { return {}; } })());
+  const saveUI = () => { try { sessionStorage.setItem('galitha.req.ui', JSON.stringify(UI)); } catch { } };
+  const curWk = () => UI.wk || hoyWk();
+
+  const ligarHrefs = sec => $$('[data-href]', sec).forEach(el => {
+    el.addEventListener('click', e => { if (e.target.closest('a, button, input, select, label')) return; location.hash = el.dataset.href; });
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === el) location.hash = el.dataset.href; });
+  });
+
+  function sinDatos(titulo) {
+    return {
+      title: titulo,
+      html: `<section class="page"><div class="empty rv">
+        <div class="empty-mark">${api.markSVG()}</div>
+        <h2 class="h2">Empieza por las obras</h2>
+        <p class="muted">Cada requisición pertenece a una obra y a una semana. Agrega la primera obra con su residente, o importa un respaldo de requisiciones en <b>Respaldo y datos</b>.</p>
+        <div class="empty-acts"><button class="btn btn--solid" type="button" data-act="nueva-obra">${I.plus}<span>Agregar obra</span></button><a class="link-u" href="#/datos">Importar respaldo</a></div>
+      </div></section>`,
+      bind() { }
+    };
+  }
+
+  /* =========================================================
+     REQUISICIONES (por obra y por semana)
+     ========================================================= */
+  async function pageReqs() {
+    await api.refresh(); cargar();
+    if (!D.obras.length) return sinDatos('Requisiciones');
+    const w = curWk(), hw = hoyWk();
+    const obras = D.obras.filter(o => visibleObra(o.id) && (!esAdmin() || !UI.obra || o.id === UI.obra) && o.estatus !== 'cerrada');
+    const delWk = D.requisiciones.filter(r => r.anio === w.anio && r.semana === w.semana && obras.some(o => o.id === r.obraId) && (UI.tipo === 'todas' || r.tipo === UI.tipo));
+    const mats = delWk.reduce((a, r) => a + r.partidas.length, 0);
+    const seg = delWk.reduce((a, r) => a + seguros(stats(r)), 0);
+    const porAut = delWk.filter(r => !r.autorizadaEn).length;
+    const ext = delWk.filter(r => r.tipo === 'extraordinaria').length;
+    const esHoy = wkKey(w) === wkKey(hw);
+
+    const grupos = obras.map((o, gi) => {
+      const rs = delWk.filter(r => r.obraId === o.id).sort((a, b) => (a.tipo === b.tipo ? 0 : a.tipo === 'ordinaria' ? -1 : 1));
+      const res = o.residente || {};
+      return `<section class="ogroup">
+        <div class="ogroup-h rv" style="--d:${120 + gi * 60}">
+          <span class="p-av">${esc(iniciales(res.nombre))}</span>
+          <div><h2>${esc(o.nombre)}</h2><p class="sub">Residente: ${esc(res.nombre || 'sin asignar')}</p></div>
+        </div>
+        <div class="rgrid">${rs.length ? rs.map((r, i) => rcard(r, 160 + gi * 60 + i * 50)).join('') : `
+          <div class="empty empty--sm rv r-empty" style="--d:${180 + gi * 60}">
+            <p class="h3">Sin requisición esta semana</p>
+            <p class="muted small">La requisición ordinaria se envía el lunes antes de las 4 pm.</p>
+            <div class="empty-acts"><button class="btn" type="button" data-nueva-en="${esc(o.id)}">${I.plus}<span>Crear requisición</span></button></div>
+          </div>`}</div>
+      </section>`;
+    }).join('');
+
+    const hist = D.requisiciones.filter(r => obras.some(o => o.id === r.obraId)).sort((a, b) => wkKey(b) - wkKey(a) || a.folio.localeCompare(b.folio));
+
+    return {
+      title: 'Requisiciones',
+      html: `<section class="page">
+        <section class="hero">
+          <div class="hero-main rv" style="--d:0">
+            <div class="deco">${api.markSVG()}</div>
+            <div>
+              <p class="h-eyebrow">Semana ${w.semana} · ${esc(wkRange(w))}${esHoy ? ' · semana en curso' : ''}</p>
+              <h1>Requisiciones<br>de obra</h1>
+            </div>
+            <p class="h-sum"><span class="h-count"><b>${delWk.length}</b> ${delWk.length === 1 ? 'requisición' : 'requisiciones'} · <b>${mats}</b> materiales</span>
+              <span class="pill">${obras.length} ${obras.length === 1 ? 'obra' : 'obras'}</span>
+              ${ext ? `<span class="pill">${ext} extraordinaria${ext > 1 ? 's' : ''}</span>` : ''}</p>
+          </div>
+          <div class="sqs-h">
+            <div class="sq sq--ok rv" style="--d:80">
+              <p>Materiales pagados<br>esta semana</p>
+              <div class="sq-row"><strong>${seg}<span class="sq-de">/${mats}</span></strong><small>Pagado = ya es seguro</small></div>
+            </div>
+            <div class="sq sq--sun rv" style="--d:140">
+              <p>Por autorizar</p>
+              <div class="sq-row"><strong>${porAut}</strong><small>${porAut === 1 ? 'requisición espera' : 'requisiciones esperan'} a coordinación</small></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="tools-top rv" style="--d:100">
+          <h2 class="h-sec">Semana</h2>
+          <div class="wk">
+            <button type="button" data-wk="-1" aria-label="Semana anterior">${I.left}</button>
+            <div class="wk-l"><b>Semana ${w.semana}</b><small>${esc(wkRange(w))}</small></div>
+            <button type="button" data-wk="1" aria-label="Semana siguiente">${I.right}</button>
+            ${esHoy ? '' : '<button type="button" class="wk-hoy" data-wk="0">Hoy</button>'}
+          </div>
+          <div class="filterbar r-fb">
+            ${esAdmin()
+              ? `<label class="psel${UI.obra ? ' on' : ''}"><span class="sr">Obra</span><select data-rf="obra"><option value="">Obra: todas</option>${D.obras.map(o => `<option value="${esc(o.id)}"${UI.obra === o.id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>`
+              : `<label class="psel on"><span class="sr">Residente de</span><select data-rf="res">${D.obras.filter(o => o.estatus !== 'cerrada').map(o => `<option value="${esc(o.id)}"${residenteObra() === o.id ? ' selected' : ''}>Residente de ${esc(o.nombre)}</option>`).join('')}</select></label>`}
+            <div class="seg" role="group" aria-label="Tipo">${[['todas', 'Todas'], ['ordinaria', 'Ordinarias'], ['extraordinaria', 'Extraordinarias']].map(([k, l]) => `<button type="button" data-tipo="${k}" aria-pressed="${UI.tipo === k}">${l}</button>`).join('')}</div>
+          </div>
+        </div>
+
+        ${grupos || '<div class="empty empty--sm"><p class="h3">No hay obras activas</p><a class="btn" href="#/obras">Ver obras</a></div>'}
+
+        <section class="panel hist rv" style="--d:200">
+          <header class="panel-h"><h2>Historial por semana <span class="n">${hist.length}</span></h2></header>
+          <div class="panel-b panel-b--flush">
+            <div class="tablewrap">
+            <table class="tbl">
+              <thead><tr><th class="pl">Semana</th><th>Folio</th><th>Obra</th><th>Tipo</th><th>Materiales</th><th>Avance</th><th>Pagados</th><th class="pr num">Monto</th></tr></thead>
+              <tbody>${hist.map(r => {
+                const s = stats(r), n = r.partidas.length;
+                return `<tr class="row" data-href="#/r/${esc(r.id)}">
+                  <td class="pl"><b>S${r.semana}</b> <span class="muted small">${esc(wkRange(r))}</span></td>
+                  <td><b>${esc(r.folio)}</b></td>
+                  <td>${esc((obra(r.obraId) || {}).nombre || '—')}</td>
+                  <td>${tipoTag(r)}</td>
+                  <td>${n}</td>
+                  <td>${sbar(s, n)}</td>
+                  <td class="pct">${n ? Math.round(seguros(s) / n * 100) : 0}%</td>
+                  <td class="pr num">${money(montoReq(r))}</td>
+                </tr>`;
+              }).join('') || '<tr><td colspan="8" class="pl muted">Todavía no hay requisiciones.</td></tr>'}</tbody>
+            </table>
+            </div>
+          </div>
+        </section>
+      </section>`,
+      bind(sec) {
+        $$('[data-wk]', sec).forEach(b => b.addEventListener('click', () => {
+          const n = +b.dataset.wk;
+          UI.wk = n === 0 ? null : wkAdd(curWk(), n);
+          saveUI(); api.rerender();
+        }));
+        $$('[data-tipo]', sec).forEach(b => b.addEventListener('click', () => { UI.tipo = b.dataset.tipo; saveUI(); api.rerender(); }));
+        const so = $('[data-rf="obra"]', sec);
+        if (so) so.addEventListener('change', () => { UI.obra = so.value; saveUI(); api.rerender(); });
+        const sr = $('[data-rf="res"]', sec);
+        if (sr) sr.addEventListener('change', () => setRol('res:' + sr.value));
+        $$('[data-nueva-en]', sec).forEach(b => b.addEventListener('click', () => drReq(null, b.dataset.nuevaEn)));
+        ligarHrefs(sec);
+      }
+    };
+  }
+
+  function sbar(s, n) {
+    if (!n) return '<div class="sbar"></div>';
+    return `<div class="sbar" role="img" aria-label="${EST.filter(e => s[e.id]).map(e => `${s[e.id]} ${e.label.toLowerCase()}`).join(', ')}">${EST.filter(e => s[e.id]).map(e => `<i class="b-${e.id}" style="flex:${s[e.id]}"></i>`).join('')}</div>`;
+  }
+  const slegend = s => `<div class="slegend">${EST.filter(e => s[e.id]).map(e => `<span><i class="b-${e.id}"></i>${s[e.id]} ${esc(e.label.toLowerCase())}</span>`).join('')}</div>`;
+  const autTag = r => (r.autorizadaEn ? `<span class="tagx tagx--ok">${I.shield}Autorizada</span>` : `<span class="tagx tagx--wait">${I.clock}Por autorizar</span>`);
+  const tipoTag = r => (r.tipo === 'extraordinaria' ? '<span class="tagx tagx--ext">Extraordinaria</span>' : '<span class="tagx">Ordinaria</span>');
+
+  function rcard(r, d) {
+    const s = stats(r), n = r.partidas.length;
+    return `<article class="card rcard rv" style="--d:${d}" data-href="#/r/${esc(r.id)}" tabindex="0">
+      <div class="c-top">
+        <span class="r-ic${r.tipo === 'extraordinaria' ? ' r-ic--ext' : ''}">${I.clip}</span>
+        <div class="c-id"><a class="pname" href="#/r/${esc(r.id)}">${esc(r.folio)}</a><span class="sub">${r.tipo === 'extraordinaria' ? 'Extraordinaria' : 'Ordinaria'} · enviada ${esc(fDateT(r.enviadaEn))}</span></div>
+        ${autTag(r)}
+      </div>
+      <div class="r-nums">
+        <div><small>Materiales</small><b>${n}</b></div>
+        <div><small>Pagados</small><b>${seguros(s)} de ${n}</b></div>
+        <div><small>Suministro</small><b>${esc(fDate(r.fechaSuministro))}</b></div>
+      </div>
+      <div>${sbar(s, n)}${slegend(s)}</div>
+    </article>`;
+  }
+
+  /* ---------- Detalle de una requisición ---------- */
+  async function pageReq({ id }) {
+    await api.refresh(); cargar();
+    const r = req(id);
+    if (!r || !visibleObra(r.obraId)) return noEncontrado('Requisición no encontrada', 'No existe o no es de la obra que estás viendo.', '#/requisiciones', 'Requisiciones');
+    const o = obra(r.obraId) || {}, s = stats(r), n = r.partidas.length;
+    const editable = !r.autorizadaEn;
+    const sel = esAdmin() && r.autorizadaEn;
+    return {
+      title: r.folio,
+      html: `<section class="page">
+        <a class="back rv" href="#/requisiciones">${I.back}<span>Requisiciones</span></a>
+        <header class="d-hero rv" style="--d:40">
+          <div class="d-top">
+            <span class="av av--xl ${r.tipo === 'extraordinaria' ? 't1' : 't0'}">${icoSz('clip', 36)}</span>
+            <div class="d-title">
+              <div class="d-tags">${tipoTag(r)} ${autTag(r)}</div>
+              <h1 class="title title--d">${esc(r.folio)}</h1>
+              <p class="d-sub"><span>${esc(o.nombre || '')}</span><span>Semana ${r.semana} · ${esc(wkRange(r))}</span><span>Residente: ${esc(r.creadaPor || '')}</span></p>
+            </div>
+            <div class="d-actions">
+              <button class="btn" type="button" data-pdf>${I.print}<span>PDF</span></button>
+              <button class="btn" type="button" data-xls>${I.vTabla}<span>Excel</span></button>
+              ${editable ? `<button class="btn" type="button" data-edit>${I.edit}<span>Editar</span></button>` : ''}
+              ${esAdmin() && !r.autorizadaEn ? `<button class="btn btn--solid" type="button" data-aut>${I.shield}<span>Autorizar</span></button>` : ''}
+            </div>
+          </div>
+          <div class="quickbar r-meta-bar">
+            <span><span class="muted">Enviada</span> <b>${esc(fDateT(r.enviadaEn))}</b></span>
+            <span><span class="muted">Autorizada</span> <b>${r.autorizadaEn ? esc(fDateT(r.autorizadaEn)) + ' · ' + esc(r.autorizadaPor || '') : 'pendiente'}</b></span>
+            <span><span class="muted">Suministro solicitado</span> <b>${esc(fDateL(r.fechaSuministro))}</b></span>
+            ${r.nota ? `<span class="muted">${esc(r.nota)}</span>` : ''}
+          </div>
+        </header>
+
+        <div class="pipe">${EST.map((e, i) => `<div class="rv${s[e.id] ? '' : ' zero'}" style="--d:${80 + i * 40}">${st(e.id, true)}<b>${s[e.id]}</b></div>`).join('')}</div>
+
+        ${!r.autorizadaEn ? `<div class="note rv" style="--d:120">${I.alert}<p>${esAdmin() ? 'Revisa los materiales y autoriza la requisición para que compras pueda cotizarlos.' : 'Coordinación de obra aún no la autoriza. Mientras tanto puedes editarla.'}</p></div>` : ''}
+
+        <section class="panel rv" style="--d:160">
+          <header class="panel-h"><h2>Materiales <span class="n">${n}</span></h2>${sel ? '<span class="muted small">Selecciona los autorizados para registrar su cotización</span>' : ''}</header>
+          <div class="panel-b panel-b--flush">
+            <div class="tablewrap">
+            <table class="tbl rtbl">
+              <thead><tr>${sel ? '<th class="c-ck"></th>' : ''}<th class="c-n">#</th><th>Insumo</th><th class="num">Cantidad</th><th>Unidad</th><th>Suministro</th><th>¿Dónde se empleará?</th><th>Proveedor</th><th>Entrega</th><th>Estado</th></tr></thead>
+              <tbody>${r.partidas.map((p, i) => {
+                const e = estado(r, p), c = compra(p.compraId), ent = entrega(p);
+                const ovS = p.fechaSuministro && p.fechaSuministro !== r.fechaSuministro;
+                const ovE = c && c.entregas && c.entregas[p.id];
+                return `<tr class="row" data-pid="${esc(p.id)}">
+                  ${sel ? `<td class="c-ck">${e === 'autorizado' ? `<input class="ck" type="checkbox" value="${esc(p.id)}" aria-label="Seleccionar ${esc(p.insumo)}">` : ''}</td>` : ''}
+                  <td class="c-n">${i + 1}</td>
+                  <td class="ins"><b>${esc(p.insumo)}</b>${p.observaciones ? `<small>${esc(p.observaciones)}</small>` : ''}</td>
+                  <td class="c-q">${qty(p.cantidad)}</td>
+                  <td>${esc(p.unidad)}</td>
+                  <td class="c-dt">${esc(fDate(suministro(r, p)))}${ovS ? '<em>propia</em>' : ''}</td>
+                  <td class="small">${esc(p.destino) || '<span class="muted">—</span>'}</td>
+                  <td class="c-prov">${c ? `<a href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>` : '<span class="muted">—</span>'}</td>
+                  <td class="c-dt">${ent ? esc(fDate(ent)) + (ovE ? '<em>propia</em>' : '') : '<span class="muted">—</span>'}</td>
+                  <td>${st(e, true)}</td>
+                </tr>`;
+              }).join('')}</tbody>
+            </table>
+            </div>
+          </div>
+        </section>
+        <div class="selbar" hidden><span><b data-nsel>0</b> materiales seleccionados</span><button class="btn btn--solid" type="button" data-cot>${I.file}<span>Registrar cotización elegida</span></button></div>
+      </section>`,
+      bind(sec) {
+        $('[data-pdf]', sec).addEventListener('click', () => imprimir(r));
+        $('[data-xls]', sec).addEventListener('click', () => excel(r));
+        const ed = $('[data-edit]', sec); if (ed) ed.addEventListener('click', () => drReq(r));
+        const au = $('[data-aut]', sec);
+        if (au) au.addEventListener('click', async () => {
+          const x = req(r.id); x.autorizadaEn = nowStr(); x.autorizadaPor = 'Coordinación de obra'; toca(x);
+          if (await guardar()) { toast(`Autorizada. ${r.creadaPor || 'El residente'} verá el cambio (aviso simulado).`); api.rerender(); }
+        });
+        const bar = $('.selbar', sec);
+        const upd = () => { const k = $$('.ck:checked', sec).length; bar.hidden = !k; $('[data-nsel]', sec).textContent = k; };
+        $$('.ck', sec).forEach(c => c.addEventListener('change', upd));
+        $('[data-cot]', sec).addEventListener('click', () => drCotizacion(r, $$('.ck:checked', sec).map(c => c.value)));
+        $$('tr[data-pid]', sec).forEach(tr => tr.addEventListener('click', e => {
+          if (e.target.closest('a, input, button')) return;
+          drMaterial(r, r.partidas.find(p => p.id === tr.dataset.pid));
+        }));
+      }
+    };
+  }
+
+  /* =========================================================
+     COMPRAS Y FACTURAS
+     ========================================================= */
+  async function pageCompras() {
+    await api.refresh(); cargar();
+    if (!D.obras.length && !D.compras.length) return sinDatos('Compras y facturas');
+    const hw = hoyWk();
+    const vis = D.compras.filter(c => visibleObra(c.obraId));
+    const obraF = esAdmin() ? UI.cObra : residenteObra();
+    const q = norm(UI.q);
+    const lista = vis.filter(c => (!obraF || c.obraId === obraF)
+      && (!UI.cWk || String(wkKey(c)) === UI.cWk)
+      && (UI.cEst === 'todas' || compraEstado(c) === UI.cEst)
+      && (!q || norm([c.proveedor.nombre, c.proveedor.rfc, c.factura && (c.factura.serie + ' ' + c.factura.folio), c.factura && c.factura.uuid,
+        ...c.partidas.map(pid => (findPartida(pid) || {}).insumo)].filter(Boolean).join(' ')).includes(q)))
+      .sort((a, b) => wkKey(b) - wkKey(a) || montoCompra(b) - montoCompra(a));
+    const pagadas = vis.filter(c => c.pago);
+    const totalPag = pagadas.reduce((a, c) => a + c.pago.monto, 0);
+    const pagWkL = pagadas.filter(c => wkKey(c) === wkKey(hw));
+    const porPagarM = vis.filter(c => c.factura && !c.pago).reduce((a, c) => a + c.factura.total, 0);
+    const semanas = [...new Set(vis.map(c => wkKey(c)))].sort((a, b) => b - a);
+
+    const porWk = {};
+    lista.forEach(c => { (porWk[wkKey(c)] = porWk[wkKey(c)] || []).push(c); });
+    let di = 0;
+    const grupos = Object.keys(porWk).sort((a, b) => b - a).map(k => {
+      const cs = porWk[k], w = { anio: Math.floor(k / 100), semana: k % 100 };
+      const tot = cs.reduce((a, c) => a + montoCompra(c), 0);
+      return `<section class="ogroup">
+        <div class="ogroup-h rv" style="--d:${Math.min(di++ * 40, 400)}"><div><h2>Semana ${w.semana}</h2><p class="sub">${esc(wkRange(w))} · ${cs.length} ${cs.length === 1 ? 'compra' : 'compras'} · ${money(tot)}</p></div></div>
+        <div class="cards cards--ancho">${cs.map(c => ccard(c, Math.min(di++ * 40, 500))).join('')}</div>
+      </section>`;
+    }).join('');
+
+    return {
+      title: 'Compras y facturas',
+      html: `<section class="page">
+        <section class="hero">
+          <div class="hero-main rv" style="--d:0">
+            <div class="deco">${api.markSVG()}</div>
+            <div><p class="h-eyebrow">Cotización elegida → factura y XML → pago → remisión</p><h1>Compras<br>y facturas</h1></div>
+            <p class="h-sum"><span class="h-count">Pagado en total: <b class="h-money">${money(totalPag)}</b></span><span class="pill">${pagadas.length} pagos</span><span class="pill">${vis.filter(c => c.factura && c.factura.uuid).length} XML leídos</span></p>
+          </div>
+          <div class="sqs-h">
+            <div class="sq sq--ok rv" style="--d:80"><p>Pagado<br>semana ${hw.semana}</p><div class="sq-row"><strong class="sq-money">${moneyK(pagWkL.reduce((a, c) => a + c.pago.monto, 0))}</strong><small>${pagWkL.length} ${pagWkL.length === 1 ? 'pago' : 'pagos'}</small></div></div>
+            <div class="sq sq--sun rv" style="--d:140"><p>Facturado<br>por pagar</p><div class="sq-row"><strong class="sq-money">${moneyK(porPagarM)}</strong><button class="sq-go" type="button" data-est-go="facturado" aria-label="Ver lo que falta pagar">${I.arrow}</button></div></div>
+          </div>
+        </section>
+
+        <section class="panel rv chart-panel" style="--d:120">
+          <header class="panel-h"><h2>Erogaciones por semana</h2>
+            ${esAdmin() ? `<label class="psel psel--sm${UI.chObra ? ' on' : ''}"><span class="sr">Obra de la gráfica</span><select data-rf="chObra"><option value="">Todas las obras</option>${D.obras.map(o => `<option value="${esc(o.id)}"${UI.chObra === o.id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>` : ''}
+          </header>
+          <div class="panel-b"><div class="chart-grid"><div class="chart-wrap" data-chart></div><div class="chart-side" data-chart-side></div></div>
+          <p class="muted small chart-nota">Pagos registrados, agrupados por la semana de su requisición. Es la base del futuro control de erogaciones y avance de obra.</p></div>
+        </section>
+
+        <div class="tools-top rv" style="--d:160">
+          <h2 class="h-sec">Compras</h2>
+          <label class="search">${I.search}<input type="search" data-q placeholder="Proveedor, folio, UUID o material" value="${esc(UI.q)}" aria-label="Buscar compras"></label>
+        </div>
+        <div class="filterbar rv" style="--d:180">
+          <div class="seg" role="group" aria-label="Estado">${[['todas', 'Todas'], ['cotizado', 'Cotizadas'], ['facturado', 'Por pagar'], ['pagado', 'Pagadas'], ['recibido', 'Recibidas']].map(([k, l]) => `<button type="button" data-est="${k}" aria-pressed="${UI.cEst === k}">${l}</button>`).join('')}</div>
+          <span class="fb-sep"></span>
+          ${esAdmin() ? `<label class="psel${UI.cObra ? ' on' : ''}"><span class="sr">Obra</span><select data-rf="cObra"><option value="">Obra</option>${D.obras.map(o => `<option value="${esc(o.id)}"${UI.cObra === o.id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>` : ''}
+          <label class="psel${UI.cWk ? ' on' : ''}"><span class="sr">Semana</span><select data-rf="cWk"><option value="">Semana</option>${semanas.map(k => `<option value="${k}"${UI.cWk === String(k) ? ' selected' : ''}>Semana ${k % 100}</option>`).join('')}</select></label>
+        </div>
+        <p class="count">Mostrando <b>${lista.length}</b> de ${vis.length} compras</p>
+        ${grupos || `<div class="empty empty--sm"><p class="h3">${vis.length ? 'Sin compras con estos filtros' : 'Todavía no hay compras'}</p><p class="muted small">Las compras nacen en una requisición autorizada: selecciona los materiales y registra la cotización elegida.</p></div>`}
+      </section>`,
+      bind(sec) {
+        $$('[data-est]', sec).forEach(b => b.addEventListener('click', () => { UI.cEst = b.dataset.est; saveUI(); api.rerender(); }));
+        $$('[data-est-go]', sec).forEach(b => b.addEventListener('click', () => { UI.cEst = b.dataset.estGo; saveUI(); api.rerender(); }));
+        $$('select[data-rf]', sec).forEach(s => s.addEventListener('change', () => { UI[s.dataset.rf] = s.value; saveUI(); api.rerender(); }));
+        const qi = $('[data-q]', sec); let t;
+        qi.addEventListener('input', () => {
+          clearTimeout(t);
+          t = setTimeout(async () => {
+            UI.q = qi.value; saveUI(); await api.rerender();
+            const n = $('[data-q]'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+          }, 250);
+        });
+        chart($('[data-chart]', sec), $('[data-chart-side]', sec));
+        ligarHrefs(sec);
+      }
+    };
+  }
+
+  const docsDe = c => [
+    ['Cotización', !!c.cotizacion], ['Factura', !!(c.factura && (c.factura.pdf || c.factura.pdfNombre || c.factura.ficticia))], ['XML', !!(c.factura && (c.factura.xml || c.factura.ficticia))],
+    ['Pago', !!c.pago], ['Remisión', !!c.remision]
+  ];
+  function ccard(c, d) {
+    const o = obra(c.obraId) || {}, r = req(c.requisicionId);
+    const mats = c.partidas.map(findPartida).filter(Boolean);
+    return `<article class="card lcard ccard rv" style="--d:${d}" data-href="#/c/${esc(c.id)}" tabindex="0">
+      <div class="l-id">
+        <span class="av ${tono(c.proveedor.nombre)}">${esc(iniciales(c.proveedor.nombre))}</span>
+        <div class="c-id"><a class="pname" href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>
+          <span class="sub">${esc(o.nombre || '')}${c.factura && c.factura.folio ? ' · ' + esc((c.factura.serie || '') + ' ' + c.factura.folio) : ''}</span>
+          ${c.ficticia ? '<div class="tags"><span class="tagx tagx--demo">Ejemplo</span></div>' : ''}</div>
+      </div>
+      <div class="l-mid">
+        <p class="w-serv c-mats">${mats.slice(0, 3).map(p => `${esc(p.insumo)} <span class="muted">(${qty(p.cantidad)} ${esc(p.unidad)})</span>`).join(' · ')}${mats.length > 3 ? ` <span class="muted">y ${mats.length - 3} más</span>` : ''}</p>
+        <div class="dchips">${docsDe(c).map(([l, ok]) => `<span class="dchip${ok ? ' ok' : ''}">${ok ? I.check : I.clock}${l}</span>`).join('')}</div>
+        <span class="muted small">${r ? 'Requisición ' + esc(r.folio) + ' · ' : ''}${mats.length} materiales · entrega ${esc(fDate(c.fechaEntrega))}</span>
+      </div>
+      <div class="c-total"><b>${money(montoCompra(c))}</b>${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
+    </article>`;
+  }
+
+  /* ---------- Gráfica: erogaciones por semana (una sola serie) ---------- */
+  function niceStep(v) {
+    if (v <= 0) return 1000;
+    const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+  }
+  function chart(el, side) {
+    if (!el) return;
+    const hw = hoyWk();
+    const obraF = esAdmin() ? UI.chObra : residenteObra();
+    const cs = D.compras.filter(c => c.pago && visibleObra(c.obraId) && (!obraF || c.obraId === obraF));
+    if (!cs.length) { el.innerHTML = '<p class="muted">Aún no hay pagos registrados.</p>'; side.innerHTML = ''; return; }
+    const min = Math.min(...cs.map(wkKey)), max = Math.max(wkKey(hw), ...cs.map(wkKey));
+    const data = [];
+    for (let w = { anio: Math.floor(min / 100), semana: min % 100 }; wkKey(w) <= max && data.length < 60; w = wkAdd(w, 1)) {
+      const xs = cs.filter(c => wkKey(c) === wkKey(w));
+      data.push({ w, total: xs.reduce((a, c) => a + c.pago.monto, 0), n: xs.length });
+    }
+    const tot = data.reduce((a, x) => a + x.total, 0);
+    const top = data.reduce((a, x) => (x.total > a.total ? x : a), data[0]);
+    const conPago = data.filter(x => x.total > 0).length;
+    side.innerHTML = `<div class="stats4">
+      <div><small>Acumulado</small><b>${money(tot)}</b></div>
+      <div><small>Promedio por semana con pagos</small><b>${money(conPago ? tot / conPago : 0)}</b></div>
+      <div><small>Semana más alta</small><b>S${top.w.semana} · ${moneyK(top.total)}</b></div></div>`;
+
+    const draw = () => {
+      const W = Math.max(260, el.clientWidth || 600), H = 220, L = 54, Rm = 6, T = 24, B = 26;
+      const iw = W - L - Rm, ih = H - T - B;
+      const step = niceStep(top.total / 3), ymax = Math.max(step * 3, step * Math.ceil(top.total / step));
+      const band = iw / data.length, bw = Math.max(6, Math.min(34, band * .58));
+      const y = v => T + ih - (v / ymax) * ih;
+      const grid = []; for (let v = 0; v <= ymax + 1; v += step) grid.push(v);
+      const every = band < 34 ? Math.ceil(34 / band) : 1;
+      const bars = data.map((x, i) => {
+        const cx = L + band * i + band / 2, h = Math.max(0, T + ih - y(x.total)), x0 = cx - bw / 2, y0 = T + ih - h, rr = Math.min(4, h, bw / 2);
+        const cur = wkKey(x.w) === wkKey(hw);
+        const path = h > 0 ? `<path class="bar${cur ? ' cur' : ''}" d="M${x0} ${T + ih}V${y0 + rr}Q${x0} ${y0} ${x0 + rr} ${y0}H${x0 + bw - rr}Q${x0 + bw} ${y0} ${x0 + bw} ${y0 + rr}V${T + ih}Z"/>` : '';
+        const lab = (x === top || cur) && x.total > 0 ? `<text class="lbl" x="${cx}" y="${y0 - 6}" text-anchor="middle">${moneyK(x.total)}</text>` : '';
+        const xl = i % every === 0 || cur ? `<text x="${cx}" y="${H - 8}" text-anchor="middle"${cur ? ' class="cur"' : ''}>S${x.w.semana}</text>` : '';
+        return `<g class="col" data-i="${i}">${path}${lab}<g class="ax">${xl}</g><rect class="hit" x="${L + band * i}" y="${T}" width="${band}" height="${ih}"/></g>`;
+      }).join('');
+      el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Erogaciones pagadas por semana">
+        <g class="grid">${grid.map(v => `<line x1="${L}" x2="${W - Rm}" y1="${y(v)}" y2="${y(v)}"/>`).join('')}</g>
+        <g class="ax">${grid.map(v => `<text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${moneyK(v)}</text>`).join('')}</g>
+        ${bars}</svg><div class="ctip"></div>`;
+      const tip = $('.ctip', el);
+      $$('g.col', el).forEach(g => {
+        g.addEventListener('mouseenter', () => {
+          const i = +g.dataset.i, x = data[i], cx = L + band * i + band / 2;
+          tip.innerHTML = `<small>Semana ${x.w.semana} · ${esc(wkRange(x.w))}</small><b>${money(x.total)}</b><small>${x.n} ${x.n === 1 ? 'pago' : 'pagos'}</small>`;
+          tip.style.left = Math.min(Math.max(cx, 90), W - 90) + 'px'; tip.style.top = Math.max(y(x.total), T + 30) + 'px'; tip.classList.add('on');
+        });
+        g.addEventListener('mouseleave', () => tip.classList.remove('on'));
+      });
+    };
+    // Solo se redibuja si cambia el ancho (evita ciclos con la barra de desplazamiento)
+    let lastW = el.clientWidth, raf = 0;
+    draw();
+    const ro = new ResizeObserver(() => {
+      if (!el.isConnected) { ro.disconnect(); return; }
+      if (Math.abs(el.clientWidth - lastW) < 8) return;
+      cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { lastW = el.clientWidth; draw(); });
+    });
+    ro.observe(el);
+  }
+
+  /* ---------- Detalle de una compra ---------- */
+  async function pageCompra({ id }) {
+    await api.refresh(); cargar();
+    const c = compra(id);
+    if (!c || !visibleObra(c.obraId)) return noEncontrado('Compra no encontrada', 'No existe o no es de la obra que estás viendo.', '#/compras', 'Compras y facturas');
+    const o = obra(c.obraId) || {}, r = req(c.requisicionId), f = c.factura;
+    const mats = c.partidas.map(findPartida).filter(Boolean);
+    const dir = enDirectorio(c);
+    const e = compraEstado(c);
+    // Ligas a los archivos de "Facturas Box" (solo funcionan en la copia local, junto a esa carpeta)
+    const href = p => (p && p.includes('/') ? p.split('/').map(encodeURIComponent).join('/') : '');
+    const fch = (icon, nombre, url, tipo) => (url
+      ? `<a class="fchip" href="${esc(url)}" target="_blank" rel="noopener">${I[icon]}<span>${esc(nombre)}</span><em>${tipo}</em></a>`
+      : `<span class="fchip">${I[icon]}<span>${esc(nombre)}</span><em>${tipo}</em></span>`);
+    const next = !c.cotizacion ? 1 : !f ? 2 : !c.pago ? 3 : !c.remision ? 4 : 0;
+    const res = o.residente || {};
+    const recibida = !!c.remision;
+
+    const doc = (n, titulo, sub, ok, cuerpo, accion) => `<div class="doc rv${ok ? ' ok' : next === n ? ' next' : ''}" style="--d:${60 + n * 40}">
+      <div class="doc-h"><span class="doc-n">${ok ? icoSz('check', 16) : n}</span><div><h3>${titulo}</h3><small>${sub}</small></div></div>
+      ${cuerpo}<div class="doc-act">${accion || ''}</div></div>`;
+    const drop = (k, txt, icon = 'upload') => `<button class="drop-mini" type="button" data-up="${k}">${I[icon]}<span>${txt}</span></button>`;
+    const lock = t => `<p class="lock">${t}</p>`;
+    const sinArch = t => `<span class="fchip none">${t}</span>`;
+    const checks = f ? validar(c) : [];
+    const msg = avisoTexto(c, mats);
+    const tel = String(res.telefono || '').replace(/\D/g, '').slice(-10);
+
+    return {
+      title: c.proveedor.nombre,
+      html: `<section class="page">
+        <a class="back rv" href="#/compras">${I.back}<span>Compras y facturas</span></a>
+        <header class="d-hero rv" style="--d:30">
+          <div class="d-top">
+            <span class="av av--xl ${tono(c.proveedor.nombre)}">${esc(iniciales(c.proveedor.nombre))}</span>
+            <div class="d-title">
+              <div class="d-tags">${st(e)}${c.ficticia ? ' <span class="tagx tagx--demo">Ejemplo ficticio</span>' : ''}${f && f.uuid ? ' <span class="tagx tagx--ok">' + I.xml + 'XML leído</span>' : ''}</div>
+              <h1 class="title title--d">${esc(c.proveedor.nombre)}</h1>
+              <p class="d-sub">${c.proveedor.rfc ? `<span class="mono">${esc(c.proveedor.rfc)}</span>` : ''}<span>${esc(o.nombre || '')}</span><span>Semana ${c.semana}</span>
+                ${r ? `<a class="link-u" href="#/r/${esc(r.id)}">Requisición ${esc(r.folio)}</a>` : ''}
+                ${dir ? `<a class="link-u" href="#/p/${encodeURIComponent(dir.id)}">${I.users}Ficha en el directorio</a>` : '<span class="muted">No está en el directorio</span>'}</p>
+            </div>
+            <div class="d-money"><div class="big-money">${money(montoCompra(c))}</div><small>${f ? 'Total facturado (IVA incluido)' : 'Total de la cotización'}</small></div>
+          </div>
+        </header>
+
+        <div class="docs">
+          ${doc(1, 'Cotización elegida', 'La que se va a pagar', !!c.cotizacion,
+            c.cotizacion ? `<div class="files">${c.cotizacion.archivo ? fch('file', c.cotizacion.archivo, '', 'PDF') : sinArch('Sin archivo')}</div><p class="dmeta"><b>${money(c.cotizacion.monto)}</b> · ${esc(fDate(c.cotizacion.fecha))}</p>` : '',
+            !c.cotizacion ? (esAdmin() ? drop('cot', 'Subir cotización (PDF)') : lock('Compras sube la cotización.')) : '')}
+          ${doc(2, 'Factura y XML', 'Los datos se leen del XML', !!f,
+            f ? `<div class="files">${f.pdf ? fch('file', f.pdf.split('/').pop(), href(f.pdf), 'PDF') : f.pdfNombre ? fch('file', f.pdfNombre, '', 'PDF') : f.ficticia ? fch('file', 'Factura ' + f.serie + '-' + f.folio, '', 'PDF') : sinArch('Falta el PDF')}
+              ${f.xml ? fch('xml', f.xml.split('/').pop(), href(f.xml), 'XML') : f.ficticia ? fch('xml', 'Factura ' + f.serie + '-' + f.folio + '.xml', '', 'XML') : ''}</div>
+              <p class="dmeta">Folio <b>${esc((f.serie || '') + ' ' + f.folio)}</b> · ${esc(fDate(f.fecha))}${f.uuid ? `<br>UUID <span class="mono">${esc(f.uuid.slice(0, 8))}…</span>` : ''}</p>` : '',
+            !f ? (!c.cotizacion ? lock('Primero la cotización.') : esAdmin() ? drop('xml', 'Subir XML y PDF', 'xml') : lock('Compras sube la factura.')) : '')}
+          ${doc(3, 'Comprobante de pago', 'Al subirlo, el material ya es seguro', !!c.pago,
+            c.pago ? `<div class="files">${c.pago.archivo ? fch('cash', c.pago.archivo, '', 'PDF') : sinArch('Sin comprobante')}</div><p class="dmeta"><b>${money(c.pago.monto)}</b> · ${esc(fDate(c.pago.fecha))}${c.pago.referencia ? ' · ' + esc(c.pago.referencia) : ''}</p>` : '',
+            !c.pago ? (!f ? lock('Primero la factura.') : esAdmin() ? drop('pago', 'Subir comprobante', 'cash') : lock('Compras sube el comprobante.')) : '')}
+          ${doc(4, 'Remisión firmada', 'Foto desde la obra al recibir', !!c.remision,
+            c.remision ? `<div class="files">${c.remision.archivo ? fch('camera', c.remision.archivo, '', 'FOTO') : sinArch('Sin foto')}</div><p class="dmeta">Recibió <b>${esc(c.remision.recibio)}</b> · ${esc(fDate(c.remision.fecha))}</p>` : '',
+            !c.remision ? (!c.pago ? lock('Se activa cuando se paga.') : drop('rem', esAdmin() ? 'Subir foto de la remisión' : 'Tomar foto de la remisión', 'camera')) : '')}
+        </div>
+
+        <div class="d-grid">
+          <div class="d-main">
+            <section class="panel rv" style="--d:200">
+              <header class="panel-h"><h2>Materiales de esta compra <span class="n">${mats.length}</span></h2></header>
+              <div class="panel-b panel-b--flush"><div class="tablewrap">
+                <table class="tbl rtbl rtbl--c"><thead><tr><th class="c-n">#</th><th>Insumo</th><th class="num">Cantidad</th><th>Unidad</th><th>Entrega</th><th>Estado</th></tr></thead>
+                <tbody>${mats.map((p, i) => {
+                  const ov = c.entregas && c.entregas[p.id];
+                  return `<tr><td class="c-n">${i + 1}</td><td class="ins"><b>${esc(p.insumo)}</b>${p.destino ? `<small>${esc(p.destino)}</small>` : ''}</td><td class="c-q">${qty(p.cantidad)}</td><td>${esc(p.unidad)}</td>
+                  <td class="c-dt">${esAdmin() && !recibida ? `<input class="in in--date" type="date" data-ent="${esc(p.id)}" value="${esc(ov || '')}" aria-label="Fecha de entrega de ${esc(p.insumo)}" title="Vacío = la fecha de la factura">${ov ? '' : `<small class="muted d-igual">igual que la factura · ${esc(fDate(c.fechaEntrega))}</small>`}` : esc(fDate(ov || c.fechaEntrega)) + (ov ? '<em>propia</em>' : '')}</td>
+                  <td>${st(r ? estado(r, p) : e, true)}</td></tr>`;
+                }).join('')}</tbody></table></div></div>
+            </section>
+
+            ${f ? `<section class="panel rv" style="--d:240">
+              <header class="panel-h"><h2>${f.uuid ? 'Datos leídos del XML' : 'Factura de ejemplo'}</h2></header>
+              <div class="panel-b">
+                <ul class="checks">${checks.map(k => `<li class="${k[0]}">${I[k[0] === 'ok' ? 'okc' : k[0] === 'no' ? 'x' : 'alert']}<span>${esc(k[1])}</span></li>`).join('')}</ul>
+                <dl class="dl dl--fac">
+                  <div><dt>Emisor</dt><dd>${esc(f.emisorNombre || '—')} <span class="mono muted">${esc(f.emisorRfc || '')}</span></dd></div>
+                  <div><dt>Receptor</dt><dd>${esc(f.receptorNombre || '—')} <span class="mono muted">${esc(f.receptorRfc || '')}</span></dd></div>
+                  <div><dt>Folio y fecha</dt><dd>${esc((f.serie || '') + ' ' + f.folio)} · ${esc(fDateT(f.fecha))}</dd></div>
+                  ${f.uuid ? `<div><dt>UUID</dt><dd class="mono">${esc(f.uuid)}</dd></div>` : ''}
+                  <div><dt>Pago</dt><dd>${esc(metodo(f.metodoPago))} · ${esc(forma(f.formaPago))}</dd></div>
+                </dl>
+                <div class="tablewrap tablewrap--bg"><table class="tbl ctbl"><thead><tr><th>Concepto</th><th class="num">Cantidad</th><th>Unidad</th><th class="num">P. unitario</th><th class="num">Importe</th></tr></thead>
+                <tbody>${f.conceptos.map(k => `<tr><td>${esc(k.descripcion)}</td><td class="num">${qty(k.cantidad)}</td><td>${esc(k.unidad)}</td><td class="num">${money(k.valorUnitario)}</td><td class="num">${money(k.importe)}</td></tr>`).join('')}</tbody>
+                <tfoot><tr><td colspan="4" class="num">Subtotal</td><td class="num">${money(f.subtotal)}</td></tr><tr><td colspan="4" class="num">IVA y otros</td><td class="num">${money(f.total - f.subtotal)}</td></tr><tr><td colspan="4" class="num">Total</td><td class="num">${money(f.total)}</td></tr></tfoot></table></div>
+              </div>
+            </section>` : ''}
+          </div>
+
+          <aside class="d-side">
+            <section class="panel rv" style="--d:220">
+              <header class="panel-h"><h2>Entrega programada</h2></header>
+              <div class="panel-b">
+                ${esAdmin() && !recibida ? `<label class="fld"><span class="fld-l">Fecha para toda la factura</span><input class="in" type="date" data-fent value="${esc(c.fechaEntrega || '')}"><span class="fld-h">Si un material llega otro día, cámbialo en la tabla de materiales.</span></label>`
+                  : `<p class="lead-s">${esc(fDateL(c.fechaEntrega))}</p>`}
+              </div>
+            </section>
+            <section class="panel rv" style="--d:260">
+              <header class="panel-h"><h2>Aviso al residente</h2></header>
+              <div class="panel-b">
+                <div class="msg-wrap">
+                  <div class="msg-h"><span class="p-av">${icoSz('wa', 18)}</span><div><b>${esc(res.nombre || 'Residente')}</b><small>${c.pago ? 'Se avisa al registrar el pago' : 'Se avisará al registrar el pago'}</small></div></div>
+                  <div class="msg">${esc(msg)}<time>${c.pago ? esc(fDate(c.pago.fecha)) : 'pendiente'}</time></div>
+                </div>
+                <div class="auto">${I.bell}<span>Cuando la plataforma tenga servidor, este aviso saldrá solo por correo y WhatsApp al subir el comprobante de pago. Por ahora puedes enviarlo tú.</span></div>
+                <div class="acts">${tel ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/52${esc(tel)}?text=${encodeURIComponent(msg)}">${I.wa}<span>Enviar por WhatsApp</span></a>` : `<span class="muted small">Agrega el celular del residente en <a class="link-u" href="#/obras">Obras</a> para enviarlo por WhatsApp.</span>`}</div>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </section>`,
+      bind(sec) {
+        $$('[data-up]', sec).forEach(b => {
+          const k = b.dataset.up;
+          b.addEventListener('click', () => subir(c.id, k));
+          b.addEventListener('dragover', ev => { ev.preventDefault(); b.classList.add('over'); });
+          b.addEventListener('dragleave', () => b.classList.remove('over'));
+          b.addEventListener('drop', ev => { ev.preventDefault(); b.classList.remove('over'); const fl = ev.dataTransfer.files[0]; if (fl) recibirArchivo(c.id, k, fl); });
+        });
+        const fe = $('[data-fent]', sec);
+        if (fe) fe.addEventListener('change', async () => { const x = compra(c.id); x.fechaEntrega = fe.value; toca(x); if (await guardar()) { toast('Fecha de entrega actualizada.'); api.rerender(); } });
+        $$('[data-ent]', sec).forEach(i => i.addEventListener('change', async () => {
+          const x = compra(c.id);
+          if (i.value && i.value !== x.fechaEntrega) x.entregas[i.dataset.ent] = i.value; else delete x.entregas[i.dataset.ent];
+          toca(x);
+          if (await guardar()) { toast('Fecha del material actualizada.'); api.rerender(); }
+        }));
+      }
+    };
+  }
+
+  const metodo = m => ({ PUE: 'Pago en una sola exhibición (PUE)', PPD: 'Pago en parcialidades o diferido (PPD)' }[m] || m || '—');
+  const forma = m => ({ '01': 'Efectivo', '02': 'Cheque', '03': 'Transferencia', '04': 'Tarjeta de crédito', '28': 'Tarjeta de débito', '99': 'Por definir' }[m] || m || '—');
+
+  function validar(c) {
+    const f = c.factura, out = [], emp = D.config.empresa;
+    if (f.ficticia) out.push(['meh', 'Factura de ejemplo: no tiene XML. Con un XML real se revisa todo esto solo.']);
+    if (emp.rfc) out.push(f.receptorRfc === emp.rfc ? ['ok', `A nombre de ${emp.nombre || 'la empresa'} (${emp.rfc}).`] : ['no', `El receptor es ${f.receptorRfc || 'desconocido'}, no ${emp.rfc}.`]);
+    if (f.uuid) { const dup = D.compras.some(x => x.id !== c.id && x.factura && x.factura.uuid === f.uuid); out.push(dup ? ['no', 'Este UUID ya está registrado en otra compra.'] : ['ok', 'UUID único: no se ha registrado antes.']); }
+    if (c.cotizacion && c.cotizacion.monto && !f.ficticia && f.cargadaEn && c.cotizacion.archivo) {
+      const d = Math.round((f.total - c.cotizacion.monto) * 100) / 100;
+      out.push(Math.abs(d) < 1 ? ['ok', 'El total coincide con la cotización.'] : ['meh', `El total difiere ${money(Math.abs(d))} de la cotización (${d > 0 ? 'más caro' : 'más barato'}).`]);
+    }
+    if (f.metodoPago) out.push(f.metodoPago === 'PUE' ? ['ok', 'Pago en una sola exhibición: basta el comprobante de transferencia.'] : ['meh', 'Factura PPD: además del pago, el proveedor debe emitir complemento de pago.']);
+    return out;
+  }
+
+  function avisoTexto(c, mats) {
+    const o = obra(c.obraId) || {};
+    const lis = mats.slice(0, 6).map(p => `• ${p.insumo.charAt(0) + p.insumo.slice(1).toLowerCase()} (${qty(p.cantidad)} ${p.unidad})`).join('\n');
+    const mas = mats.length > 6 ? `\n• y ${mats.length - 6} más` : '';
+    return `✅ Material pagado · ${o.nombre || ''}\n${c.proveedor.nombre} ya está pagado:\n${lis}${mas}\n\nEntrega programada: ${fDateL(c.fechaEntrega)}.\nAl recibir, sube la foto de la remisión firmada.`;
+  }
+
+  /* ---------- Documentos: hoy solo se guarda el nombre del archivo; el XML sí se lee ---------- */
+  function subir(cid, k) {
+    if (k === 'xml') return drXml(cid);
+    const fp = $('#filepick');
+    fp.value = '';
+    fp.accept = k === 'rem' ? 'image/*,application/pdf' : 'application/pdf,image/*';
+    if (k === 'rem') fp.setAttribute('capture', 'environment'); else fp.removeAttribute('capture');
+    fp.onchange = () => { if (fp.files[0]) recibirArchivo(cid, k, fp.files[0]); };
+    fp.click();
+  }
+  async function recibirArchivo(cid, k, file) {
+    if (k === 'xml' || /\.xml$/i.test(file.name)) return drXml(cid, file);
+    const c = compra(cid); if (!c) return;
+    if (k === 'cot') c.cotizacion = { archivo: file.name, fecha: today(), monto: c.cotizacion ? c.cotizacion.monto : 0, nota: '' };
+    if (k === 'pago') c.pago = { archivo: file.name, fecha: today(), monto: c.factura ? c.factura.total : 0, referencia: 'Transferencia', nota: '' };
+    if (k === 'rem') c.remision = { archivo: file.name, fecha: today(), recibio: yo(), nota: '' };
+    toca(c);
+    if (!(await guardar())) return;
+    api.rerender();
+    if (k === 'pago') {
+      const res = ((obra(c.obraId) || {}).residente || {}).nombre || 'el residente';
+      toast(`Pagado: ya es seguro. Avisa a ${res} desde "Aviso al residente".`);
+    } else toast(`"${file.name}" registrado. Por ahora se guarda el nombre, no el archivo.`);
+  }
+
+  /* ---------- Lectura del XML (CFDI) en el navegador ---------- */
+  function parseCFDI(text) {
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('El archivo no es un XML válido.');
+    const q = n => doc.getElementsByTagNameNS('*', n)[0];
+    const c = q('Comprobante'); if (!c) throw new Error('No parece una factura (CFDI): falta el nodo Comprobante.');
+    const e = q('Emisor') || c, r = q('Receptor') || c, t = q('TimbreFiscalDigital');
+    const a = (el, k) => (el && el.getAttribute(k)) || '';
+    const n = v => Math.round(parseFloat(v || 0) * 100) / 100;
+    return {
+      serie: a(c, 'Serie'), folio: a(c, 'Folio'), fecha: a(c, 'Fecha'), subtotal: n(a(c, 'SubTotal')), total: n(a(c, 'Total')), moneda: a(c, 'Moneda'),
+      formaPago: a(c, 'FormaPago'), metodoPago: a(c, 'MetodoPago'), tipo: a(c, 'TipoDeComprobante'), version: a(c, 'Version'),
+      emisorRfc: a(e, 'Rfc'), emisorNombre: a(e, 'Nombre'), receptorRfc: a(r, 'Rfc'), receptorNombre: a(r, 'Nombre'), usoCfdi: a(r, 'UsoCFDI'),
+      uuid: a(t, 'UUID').toUpperCase(),
+      conceptos: [...doc.getElementsByTagNameNS('*', 'Concepto')].map(k => ({ cantidad: n(a(k, 'Cantidad')), unidad: a(k, 'Unidad') || a(k, 'ClaveUnidad'), descripcion: a(k, 'Descripcion').replace(/\s+/g, ' ').trim(), valorUnitario: n(a(k, 'ValorUnitario')), importe: n(a(k, 'Importe')) }))
+    };
+  }
+  const mismoNombre = (a, b) => { const x = norm(a).split(/\s+/)[0], y = norm(b); return x.length > 2 && y.includes(x); };
+
+  // Encabezado y pie de los paneles del módulo (el panel lateral lo pone la app)
+  const drHead = (sub, title) => `<header class="dr-h"><div><p class="mono">${sub}</p><h2 id="dr-title">${title}</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>`;
+  const drFoot = (okLabel, attrs = '') => `<footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cancelar</span></button><button type="submit" class="btn btn--solid" data-ok ${attrs}>${I.check}<span>${okLabel}</span></button></footer>`;
+
+  function drXml(compraId, fileInicial) {
+    if (!esAdmin()) { toast('Solo la oficina sube facturas.'); return; }
+    cargar();
+    let parsed = null, xmlName = '', pdfName = '';
+    api.openPanel(`<form class="dr-form" novalidate>
+      ${drHead('Compras y facturas', 'Subir factura')}
+      <div class="dr-b">
+        <fieldset class="fs"><legend><span class="mono">1</span>XML de la factura</legend><div class="fs-b">
+          <label class="drop" data-drop>${I.xml}<b>Arrastra aquí el XML</b><span class="muted">o haz clic para elegirlo</span><input type="file" accept=".xml,text/xml,application/xml" hidden data-xmlin></label>
+          <div data-res></div>
+        </div></fieldset>
+        <fieldset class="fs"><legend><span class="mono">2</span>PDF de la factura <span class="opt">por ahora solo se guarda el nombre</span></legend><div class="fs-b">
+          <input class="in" type="file" accept="application/pdf" data-pdfin aria-label="PDF de la factura">
+        </div></fieldset>
+        <fieldset class="fs"><legend><span class="mono">3</span>¿De qué compra es?</legend><div class="fs-b">
+          <label class="fld"><span class="fld-l">Compra con cotización registrada</span><select class="in" data-dest></select>
+          <span class="fld-h">Una factura es de una sola obra y de una sola semana. Se sugiere la compra del mismo proveedor.</span></label>
+        </div></fieldset>
+      </div>
+      ${drFoot('Guardar factura', 'disabled')}
+    </form>`, {}, panel => {
+      const form = $('form', panel), sel = $('[data-dest]', panel), res = $('[data-res]', panel), ok = $('[data-ok]', panel);
+      const upd = () => { ok.disabled = !(parsed && sel.value); };
+      const fillSel = () => {
+        const cs = D.compras.filter(c => !c.factura && visibleObra(c.obraId));
+        let best = compraId || '';
+        if (!best && parsed) {
+          const m = cs.find(c => (c.proveedor.rfc && c.proveedor.rfc === parsed.emisorRfc) || mismoNombre(c.proveedor.nombre, parsed.emisorNombre));
+          if (m) best = m.id;
+        }
+        sel.innerHTML = '<option value="">Elige una compra…</option>' + cs.map(c => `<option value="${esc(c.id)}"${c.id === best ? ' selected' : ''}>${esc(c.proveedor.nombre)} · ${esc((obra(c.obraId) || {}).nombre || '')} · S${c.semana} · ${money(c.cotizacion ? c.cotizacion.monto : 0)}</option>`).join('')
+          + (cs.length ? '' : '<option value="" disabled>No hay compras esperando factura</option>');
+        upd();
+      };
+      sel.addEventListener('change', upd);
+      const leer = file => {
+        xmlName = file.name;
+        file.text().then(t => {
+          try { parsed = parseCFDI(t); } catch (x) { parsed = null; res.innerHTML = `<p class="warn">${I.alert}${esc(x.message)}</p>`; upd(); return; }
+          const dup = D.compras.find(c => c.factura && c.factura.uuid && c.factura.uuid === parsed.uuid);
+          const emp = D.config.empresa;
+          const rfcOk = !emp.rfc || parsed.receptorRfc === emp.rfc;
+          res.innerHTML = `<ul class="checks">
+              <li class="ok">${I.okc}<span>CFDI ${esc(parsed.version)} leído: ${parsed.conceptos.length} conceptos.</span></li>
+              ${emp.rfc ? `<li class="${rfcOk ? 'ok' : 'no'}">${I[rfcOk ? 'okc' : 'x']}<span>${rfcOk ? 'A nombre de ' + esc(emp.nombre || emp.rfc) : 'El receptor (' + esc(parsed.receptorRfc) + ') no es ' + esc(emp.rfc)}</span></li>` : ''}
+              <li class="${dup ? 'no' : 'ok'}">${I[dup ? 'x' : 'okc']}<span>${dup ? 'Este UUID ya está registrado (' + esc(dup.proveedor.nombre) + ', S' + dup.semana + ').' : 'UUID nuevo.'}</span></li>
+            </ul>
+            <dl class="dl dl--fac">
+              <div><dt>Proveedor</dt><dd>${esc(parsed.emisorNombre)} <span class="mono muted">${esc(parsed.emisorRfc)}</span></dd></div>
+              <div><dt>Folio</dt><dd>${esc(parsed.serie + ' ' + parsed.folio)} · ${esc(fDateT(parsed.fecha))}</dd></div>
+              <div><dt>UUID</dt><dd class="mono">${esc(parsed.uuid)}</dd></div>
+              <div><dt>Total</dt><dd><b>${money(parsed.total)}</b> <span class="muted">(subtotal ${money(parsed.subtotal)})</span></dd></div>
+              <div><dt>Conceptos</dt><dd>${parsed.conceptos.slice(0, 6).map(k => esc(k.descripcion) + ' <span class="muted">· ' + qty(k.cantidad) + ' ' + esc(k.unidad) + '</span>').join('<br>')}${parsed.conceptos.length > 6 ? '<br><span class="muted">y ' + (parsed.conceptos.length - 6) + ' más</span>' : ''}</dd></div>
+            </dl>`;
+          if (dup) parsed = null;
+          fillSel();
+        });
+      };
+      const dz = $('[data-drop]', panel), xi = $('[data-xmlin]', panel);
+      xi.addEventListener('change', () => { if (xi.files[0]) leer(xi.files[0]); });
+      dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+      dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+      dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); if (e.dataTransfer.files[0]) leer(e.dataTransfer.files[0]); });
+      $('[data-pdfin]', panel).addEventListener('change', e => { pdfName = e.target.files[0] ? e.target.files[0].name : ''; });
+      form.addEventListener('submit', async e => {
+        e.preventDefault();
+        const c = compra(sel.value); if (!c || !parsed) return;
+        c.factura = Object.assign(parsed, { xml: xmlName, pdf: '', pdfNombre: pdfName, cargadaEn: today() });
+        if (!c.proveedor.rfc) c.proveedor.rfc = parsed.emisorRfc;
+        if (!c.proveedor.razonSocial) c.proveedor.razonSocial = parsed.emisorNombre;
+        toca(c);
+        if (!(await guardar())) return;
+        api.closeDrawer(true);
+        toast('Factura guardada. Los materiales pasan a "Facturado".');
+        if (location.hash === '#/c/' + c.id) api.rerender(); else location.hash = '#/c/' + c.id;
+      });
+      fillSel();
+      if (fileInicial) leer(fileInicial);
+    });
+  }
+
+  /* ---------- Registrar la cotización elegida para materiales seleccionados ---------- */
+  async function drCotizacion(r, ids) {
+    await api.refresh(); cargar();
+    const rr = req(r.id), ps = rr.partidas.filter(p => ids.includes(p.id));
+    const DIR = api.proveedores();
+    const nombres = [...new Set([...DIR.map(api.nombreProveedor), ...D.compras.map(c => c.proveedor.nombre)].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+    api.openPanel(`<form class="dr-form" novalidate>
+      ${drHead(`${esc(rr.folio)} · ${ps.length} materiales`, 'Cotización elegida')}
+      <div class="dr-b">
+        <fieldset class="fs"><legend><span class="mono">1</span>Proveedor y monto</legend><div class="fs-b"><div class="grid2">
+          <label class="fld fld--wide"><span class="fld-l">Proveedor <em>*</em></span><input class="in" name="prov" list="dl-prov" required placeholder="Escribe o elige del directorio"><datalist id="dl-prov">${nombres.map(n => `<option value="${esc(n)}">`).join('')}</datalist></label>
+          <label class="fld"><span class="fld-l">Total con IVA <em>*</em></span><input class="in" name="monto" type="number" min="0" step="0.01" required></label>
+          <label class="fld"><span class="fld-l">Entrega programada</span><input class="in" name="ent" type="date" value="${esc(rr.fechaSuministro)}"><span class="fld-h">Para toda la factura; se puede ajustar por material.</span></label>
+          <label class="fld fld--wide"><span class="fld-l">Archivo de la cotización</span><input class="in" name="arch" type="file" accept="application/pdf,image/*"><span class="fld-h">Por ahora solo se guarda el nombre del archivo.</span></label>
+        </div></div></fieldset>
+        <fieldset class="fs"><legend><span class="mono">2</span>Materiales incluidos</legend><div class="fs-b">
+          <ul class="tlist">${ps.map(p => `<li class="tline"><span class="tnum">${qty(p.cantidad)} ${esc(p.unidad)}</span><span class="tmail">${esc(p.insumo)}</span></li>`).join('')}</ul>
+        </div></fieldset>
+      </div>
+      ${drFoot('Guardar cotización')}
+    </form>`, {}, panel => {
+      const form = $('form', panel);
+      form.addEventListener('input', api.markDirty);
+      form.addEventListener('submit', async e => {
+        e.preventDefault();
+        const prov = form.prov.value.trim(), monto = parseFloat(form.monto.value);
+        if (!prov || !(monto > 0)) { $('[data-err]', panel).textContent = 'Escribe el proveedor y el total.'; return; }
+        const p0 = DIR.find(p => norm(api.nombreProveedor(p)) === norm(prov));
+        const c = {
+          id: R.uid(), obraId: rr.obraId, requisicionId: rr.id, anio: rr.anio, semana: rr.semana,
+          proveedor: { nombre: prov, rfc: p0 ? p0.rfc : '', razonSocial: p0 ? p0.razonSocial : '', id: p0 ? p0.id : '' }, partidas: ps.map(p => p.id),
+          fechaEntrega: form.ent.value || rr.fechaSuministro, entregas: {},
+          cotizacion: { archivo: form.arch.files[0] ? form.arch.files[0].name : '', fecha: today(), monto, nota: '' }, factura: null, pago: null, remision: null
+        };
+        toca(c);
+        D.compras.push(c); ps.forEach(p => { p.compraId = c.id; }); toca(rr);
+        if (!(await guardar())) return;
+        api.closeDrawer(true);
+        toast('Cotización registrada. Siguiente paso: la factura y su XML.');
+        location.hash = '#/c/' + c.id;
+      });
+    });
+  }
+
+  /* ---------- Línea de tiempo de un material ---------- */
+  function drMaterial(r, p) {
+    const c = compra(p.compraId), e = estado(r, p), k = estIdx(e), f = c && c.factura;
+    const pasos = [
+      ['Requisitado', `Lo pidió ${r.creadaPor} · ${fDateT(r.enviadaEn)}`, 'Lo pide el residente en la requisición'],
+      ['Autorizado', r.autorizadaEn ? `${r.autorizadaPor} · ${fDateT(r.autorizadaEn)}` : '', 'Espera la autorización de coordinación de obra'],
+      ['Cotizado', c && c.cotizacion ? `${c.proveedor.nombre} · ${money(c.cotizacion.monto)} · ${fDate(c.cotizacion.fecha)}` : '', 'Compras registra la cotización elegida'],
+      ['Facturado', f ? `Factura ${f.serie || ''} ${f.folio} · ${fDate(f.fecha)}` : '', 'Compras sube la factura y su XML'],
+      ['Pagado: ya es seguro', c && c.pago ? `${money(c.pago.monto)} · ${fDateL(c.pago.fecha)}` : '', 'Al subir el comprobante se avisa al residente'],
+      ['Recibido en obra', c && c.remision ? `Recibió ${c.remision.recibio} · ${fDate(c.remision.fecha)}` : '', entrega(p) ? `Entrega programada: ${fDateL(entrega(p))}` : 'Se sube la foto de la remisión firmada']
+    ];
+    api.openPanel(`<div class="dr-form">
+      ${drHead(`${esc(r.folio)} · material ${r.partidas.indexOf(p) + 1}`, esc(p.insumo))}
+      <div class="dr-b">
+        <section class="fs"><div class="fs-b">
+          <div class="m-head"><span class="lead-s">${qty(p.cantidad)} ${esc(p.unidad)}</span>${st(e)}</div>
+          <dl class="dl">
+            ${p.observaciones ? `<div><dt>Observaciones</dt><dd>${esc(p.observaciones)}</dd></div>` : ''}
+            <div><dt>¿Dónde se empleará?</dt><dd>${esc(p.destino || '—')}</dd></div>
+            <div><dt>Suministro solicitado</dt><dd>${esc(fDateL(suministro(r, p)))}${p.fechaSuministro ? ' <span class="muted">(fecha propia)</span>' : ''}</dd></div>
+            <div><dt>Proveedor</dt><dd>${c ? `<a class="link-u" href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>` : '—'}</dd></div>
+          </dl>
+        </div></section>
+        <section class="fs"><div class="fs-b">
+          <ol class="tl">${pasos.map(([t, hecho, pend], i) => `<li class="${i <= k ? 'done' : i === k + 1 ? 'now' : ''}"><span class="dot">${I[EST[i].ico]}</span><div><h4>${t}</h4><p>${esc(i <= k ? hecho : pend)}</p></div></li>`).join('')}</ol>
+        </div></section>
+      </div>
+      <footer class="dr-f">${c ? `<a class="btn btn--solid" href="#/c/${esc(c.id)}">${I.receipt}<span>Ver la compra</span></a>` : '<button class="btn" type="button" data-close><span>Cerrar</span></button>'}</footer>
+    </div>`);
+  }
+
+  /* ---------- Nueva requisición / editar ---------- */
+  function drReq(r0, obraPre) {
+    cargar();
+    const r = r0 ? req(r0.id) : null;
+    const nueva = !r;
+    const obras = D.obras.filter(o => visibleObra(o.id) && o.estatus !== 'cerrada');
+    if (!obras.length) { toast(D.obras.length ? 'No hay obras activas.' : 'Primero agrega una obra.'); location.hash = '#/obras'; return; }
+    const w = nueva ? curWk() : { anio: r.anio, semana: r.semana };
+    const oSel = nueva ? (obraPre || (esAdmin() ? (UI.obra || obras[0].id) : residenteObra())) : r.obraId;
+    const ordinariaExiste = (oid, ww) => D.requisiciones.some(x => x !== r && x.obraId === oid && x.anio === ww.anio && x.semana === ww.semana && x.tipo === 'ordinaria');
+    const tipo0 = nueva ? (ordinariaExiste(oSel, w) ? 'extraordinaria' : 'ordinaria') : r.tipo;
+    const fSum0 = nueva ? ymd(addDays(lunes(w.anio, w.semana), 4)) : r.fechaSuministro;
+    const vacia = () => ({ id: '', insumo: '', unidad: 'PZA', cantidad: '', observaciones: '', destino: '', fechaSuministro: '' });
+    const filas = nueva ? Array.from({ length: 5 }, vacia) : r.partidas.map(p => Object.assign({}, p));
+    const fila = (p, i) => `<div class="prow" data-pid="${esc(p.id)}">
+      <i>${i + 1}</i>
+      <input class="in" name="insumo" placeholder="Insumo" value="${esc(p.insumo)}" aria-label="Insumo">
+      <select class="in" name="unidad" aria-label="Unidad">${[...new Set([...UNIDADES, p.unidad].filter(Boolean))].map(u => `<option${u === p.unidad ? ' selected' : ''}>${esc(u)}</option>`).join('')}</select>
+      <input class="in" name="cantidad" type="number" min="0" step="any" placeholder="0" value="${esc(p.cantidad)}" aria-label="Cantidad">
+      <input class="in" name="obs" placeholder="Presentación, color…" value="${esc(p.observaciones)}" aria-label="Observaciones">
+      <input class="in" name="destino" placeholder="¿Dónde se empleará?" value="${esc(p.destino)}" aria-label="¿Dónde se empleará?">
+      <input class="in" name="pfsum" type="date" value="${esc(p.fechaSuministro)}" aria-label="Fecha propia de suministro" title="Vacío = la fecha de la requisición">
+      <button class="ibtn" type="button" data-del aria-label="Quitar renglón">${I.trash}</button>
+    </div>`;
+    api.openPanel(`<form class="dr-form" novalidate>
+      ${drHead(nueva ? 'Requisición de materiales' : esc(r.folio), nueva ? 'Nueva requisición' : 'Editar requisición')}
+      <div class="dr-b">
+        <fieldset class="fs"><legend><span class="mono">1</span>Obra y semana</legend><div class="fs-b"><div class="grid3">
+          <label class="fld"><span class="fld-l">Obra</span><select class="in" name="obra"${esAdmin() && nueva ? '' : ' disabled'}>${obras.map(o => `<option value="${esc(o.id)}"${o.id === oSel ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>
+          <label class="fld"><span class="fld-l">Semana</span><input class="in" name="semana" type="number" min="1" max="53" value="${w.semana}"${nueva ? '' : ' disabled'}><span class="fld-h" data-corte>Corte ${esc(wkRange(w))}</span></label>
+          <label class="fld"><span class="fld-l">Suministro en obra</span><input class="in" name="fsum" type="date" value="${esc(fSum0)}"><span class="fld-h">Para toda la requisición; cada material puede tener la suya.</span></label>
+          <div class="fld fld--wide"><span class="fld-l">Tipo</span><div class="toggles">
+            <label class="chk chk--pill"><input type="radio" name="tipo" value="ordinaria"${tipo0 === 'ordinaria' ? ' checked' : ''}><span>Ordinaria (lunes 4 pm)</span></label>
+            <label class="chk chk--pill"><input type="radio" name="tipo" value="extraordinaria"${tipo0 === 'extraordinaria' ? ' checked' : ''}><span>Extraordinaria</span></label>
+          </div><span class="fld-h" data-tipo-h></span></div>
+        </div></div></fieldset>
+        <fieldset class="fs"><legend><span class="mono">2</span>Materiales <span class="opt" data-cnt></span></legend><div class="fs-b">
+          <div class="prow-h"><span>#</span><span>Insumo</span><span>Unidad</span><span>Cantidad</span><span>Observaciones</span><span>¿Dónde se empleará?</span><span>Fecha propia</span><span></span></div>
+          <div class="prows">${filas.map(fila).join('')}</div>
+          <button class="tbtn tbtn--sm" type="button" data-add>${I.plus}<span>Agregar renglón</span></button>
+        </div></fieldset>
+      </div>
+      ${drFoot(nueva ? 'Enviar requisición' : 'Guardar cambios')}
+    </form>`, { wide: true }, panel => {
+      const form = $('form', panel), rows = $('.prows', panel);
+      form.addEventListener('input', api.markDirty);
+      const semanaDe = () => { const n = parseInt(form.semana.value, 10); return { anio: w.anio, semana: n >= 1 && n <= 53 ? n : w.semana }; };
+      const renum = () => {
+        $$('.prow', rows).forEach((x, i) => { x.querySelector('i').textContent = i + 1; });
+        const n = $$('.prow', rows).length;
+        $('[data-cnt]', panel).textContent = `${n} de 30 renglones`;
+        $('[data-add]', panel).disabled = n >= 30;
+      };
+      const tipoH = () => {
+        const oid = form.obra.value, ww = semanaDe();
+        $('[data-corte]', panel).textContent = 'Corte ' + wkRange(ww);
+        const ya = ordinariaExiste(oid, ww);
+        $('[data-tipo-h]', panel).textContent = ya ? 'Esta obra ya tiene su requisición ordinaria esa semana: la nueva será extraordinaria.' : '';
+        if (nueva && ya) form.tipo.value = 'extraordinaria';
+      };
+      form.obra.addEventListener('change', tipoH); form.semana.addEventListener('input', tipoH);
+      rows.addEventListener('click', e => { const b = e.target.closest('[data-del]'); if (b && $$('.prow', rows).length > 1) { b.closest('.prow').remove(); renum(); api.markDirty(); } });
+      $('[data-add]', panel).addEventListener('click', () => { rows.insertAdjacentHTML('beforeend', fila(vacia(), 0)); renum(); $$('.prow', rows).pop().querySelector('input').focus(); });
+      renum(); tipoH();
+      form.addEventListener('submit', async e => {
+        e.preventDefault();
+        const err = $('[data-err]', panel);
+        const ps = $$('.prow', rows).map(x => ({
+          id: x.dataset.pid || R.uid(), insumo: x.querySelector('[name="insumo"]').value.trim().toUpperCase(), unidad: x.querySelector('[name="unidad"]').value,
+          cantidad: parseFloat(x.querySelector('[name="cantidad"]').value), observaciones: x.querySelector('[name="obs"]').value.trim().toUpperCase(),
+          destino: x.querySelector('[name="destino"]').value.trim().toUpperCase(), fechaSuministro: x.querySelector('[name="pfsum"]').value,
+          compraId: x.dataset.pid && r ? (r.partidas.find(p => p.id === x.dataset.pid) || {}).compraId || '' : ''
+        })).filter(p => p.insumo || p.cantidad);
+        const mal = ps.find(p => !p.insumo || !(p.cantidad > 0));
+        if (!ps.length || mal) { err.textContent = !ps.length ? 'Agrega al menos un material.' : `Falta insumo o cantidad en "${mal.insumo || 'un renglón'}".`; return; }
+        if (!form.fsum.value) { err.textContent = 'Indica la fecha de suministro en obra.'; return; }
+        if (nueva) {
+          const o = obra(form.obra.value), ww = semanaDe(), tipo = form.tipo.value;
+          const ext = D.requisiciones.filter(x => x.obraId === o.id && x.anio === ww.anio && x.semana === ww.semana && x.tipo === 'extraordinaria').length;
+          const nr = {
+            id: R.uid(), obraId: o.id, anio: ww.anio, semana: ww.semana, tipo,
+            folio: `${o.clave || 'OBRA'}-S${ww.semana}${tipo === 'extraordinaria' ? '-E' + (ext + 1) : ''}`,
+            fechaSuministro: form.fsum.value, creadaPor: yo(), enviadaEn: nowStr(), autorizadaEn: '', autorizadaPor: '', nota: '', partidas: ps
+          };
+          toca(nr); D.requisiciones.push(nr);
+          if (!(await guardar())) return;
+          api.closeDrawer(true);
+          toast('Requisición enviada. Coordinación la verá en "Por autorizar".');
+          UI.wk = ww; saveUI(); location.hash = '#/r/' + nr.id;
+        } else {
+          r.partidas = ps; r.fechaSuministro = form.fsum.value; r.tipo = form.tipo.value; toca(r);
+          if (!(await guardar())) return;
+          api.closeDrawer(true); toast('Cambios guardados.'); api.rerender();
+        }
+      });
+    });
+  }
+
+  /* =========================================================
+     OBRAS (con su residente). El nombre también vive en la lista
+     "Obras" del directorio, para marcar dónde trabajó cada proveedor.
+     ========================================================= */
+  async function pageObras() {
+    await api.refresh(); cargar();
+    const os = D.obras.filter(o => visibleObra(o.id));
+    const DIR = api.proveedores();
+    return {
+      title: 'Obras',
+      html: `<section class="page">
+        <header class="page-head rv"><div><p class="eyebrow">Cada obra con su residente</p><h1 class="title">Obras</h1></div></header>
+        <div class="note note--info rv" style="--d:60">${I.building}<p>El nombre de cada obra también aparece en la lista "Obras" del directorio, para marcar en qué obras ha trabajado cada proveedor. Cuando existan cuentas, el residente tendrá permiso para crear y editar las requisiciones de su obra.</p></div>
+        ${os.length ? `<div class="cards cards--amplias">${os.map((o, i) => {
+          const rs = D.requisiciones.filter(r => r.obraId === o.id), cs = D.compras.filter(c => c.obraId === o.id && c.pago);
+          const provs = DIR.filter(p => p.obras.some(x => norm(x) === norm(o.nombre)));
+          const res = o.residente || {};
+          return `<article class="card wcard ocard rv" style="--d:${100 + i * 60}"${esAdmin() ? ` data-obra="${esc(o.id)}" tabindex="0"` : ''}>
+            <div class="c-top"><span class="av">${esc((o.clave || iniciales(o.nombre)).slice(0, 5))}</span><div class="c-id"><span class="pname">${esc(o.nombre)}</span><span class="sub">${esc(o.direccion || 'Sin dirección')}</span></div>
+              <span class="tag ${o.estatus === 'cerrada' ? 'tag--off' : 'tag--activo'}"><i></i>${o.estatus === 'cerrada' ? 'Cerrada' : 'Activa'}</span></div>
+            <div class="stats4"><div><small>Requisiciones</small><b>${rs.length}</b></div><div><small>Semanas con requisición</small><b>${new Set(rs.map(wkKey)).size}</b></div><div><small>Pagado</small><b>${moneyK(cs.reduce((a, c) => a + c.pago.monto, 0))}</b></div></div>
+            ${provs.length ? `<div class="o-provs"><small class="muted">Proveedores del directorio en esta obra</small><div class="l-tags">${provs.slice(0, 6).map(p => `<a class="chip-ro" href="#/p/${encodeURIComponent(p.id)}">${esc(api.nombreProveedor(p))}</a>`).join('')}${provs.length > 6 ? `<span class="more">+${provs.length - 6}</span>` : ''}</div></div>` : ''}
+            <div class="c-bot"><span class="p-av">${esc(iniciales(res.nombre))}</span><div class="c-who"><b>${esc(res.nombre || 'Sin residente')}</b><small>Residente de obra${res.telefono ? ' · ' + esc(res.telefono) : ''}${res.correo ? ' · ' + esc(res.correo) : ''}</small></div></div>
+          </article>`;
+        }).join('')}</div>` : `<div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">Sin obras</h2><p class="muted">Agrega la primera obra con su residente.</p><div class="empty-acts"><button class="btn btn--solid" type="button" data-act="nueva-obra">${I.plus}<span>Agregar obra</span></button></div></div>`}
+      </section>`,
+      bind(sec) {
+        $$('[data-obra]', sec).forEach(c => {
+          c.addEventListener('click', e => { if (e.target.closest('a')) return; drObra(obra(c.dataset.obra)); });
+          c.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === c) drObra(obra(c.dataset.obra)); });
+        });
+      }
+    };
+  }
+
+  // Mantiene la lista "Obras" del directorio al día: agrega el nombre o lo renombra en todos los proveedores
+  async function syncListaObras(anterior, nuevo) {
+    try {
+      await api.refresh();
+      const ob = api.listas().obras || [];
+      const tiene = v => ob.some(x => norm(x) === norm(v));
+      if (anterior && norm(anterior) !== norm(nuevo) && tiene(anterior)) await api.Store.renombrarOpcion('obras', anterior, nuevo);
+      else if (nuevo && !tiene(nuevo)) await api.Store.guardarLista('obras', [...ob, nuevo]);
+      await api.refresh();
+    } catch { /* la lista del directorio no es crítica para la obra */ }
+  }
+
+  function drObra(o0) {
+    if (!esAdmin()) { toast('Solo la oficina edita las obras.'); return; }
+    cargar();
+    const o = o0 ? obra(o0.id) : null;
+    const nueva = !o, x = o || { nombre: '', clave: '', direccion: '', estatus: 'activa', residente: { nombre: '', correo: '', telefono: '' } };
+    api.openPanel(`<form class="dr-form" novalidate>
+      ${drHead('Obras', nueva ? 'Agregar obra' : 'Editar obra')}
+      <div class="dr-b">
+        <fieldset class="fs"><legend><span class="mono">1</span>Obra</legend><div class="fs-b"><div class="grid2">
+          <label class="fld fld--wide"><span class="fld-l">Nombre <em>*</em></span><input class="in" name="nombre" value="${esc(x.nombre)}" required placeholder="Eje Central 469"></label>
+          <label class="fld"><span class="fld-l">Clave para folios</span><input class="in" name="clave" value="${esc(x.clave)}" maxlength="8" placeholder="EC469"><span class="fld-h">Los folios quedan como EC469-S40.</span></label>
+          <label class="fld"><span class="fld-l">Estatus</span><select class="in" name="estatus"><option value="activa"${x.estatus !== 'cerrada' ? ' selected' : ''}>Activa</option><option value="cerrada"${x.estatus === 'cerrada' ? ' selected' : ''}>Cerrada</option></select></label>
+          <label class="fld fld--wide"><span class="fld-l">Dirección</span><input class="in" name="direccion" value="${esc(x.direccion)}"></label>
+        </div></div></fieldset>
+        <fieldset class="fs"><legend><span class="mono">2</span>Residente de obra</legend><div class="fs-b"><div class="grid2">
+          <label class="fld fld--wide"><span class="fld-l">Nombre</span><input class="in" name="rnombre" value="${esc(x.residente.nombre)}"></label>
+          <label class="fld"><span class="fld-l">Celular (avisos por WhatsApp)</span><input class="in" name="rtel" type="tel" value="${esc(x.residente.telefono)}"></label>
+          <label class="fld"><span class="fld-l">Correo (avisos)</span><input class="in" name="rcorreo" type="email" value="${esc(x.residente.correo)}"></label>
+        </div></div></fieldset>
+      </div>
+      ${drFoot('Guardar')}
+    </form>`, {}, panel => {
+      const f = $('form', panel);
+      f.addEventListener('input', api.markDirty);
+      f.addEventListener('submit', async e => {
+        e.preventDefault();
+        const nombre = f.nombre.value.trim();
+        if (!nombre) { $('[data-err]', panel).textContent = 'Escribe el nombre de la obra.'; f.nombre.classList.add('invalid'); return; }
+        if (D.obras.some(y => y !== o && norm(y.nombre) === norm(nombre))) { $('[data-err]', panel).textContent = 'Ya existe una obra con ese nombre.'; return; }
+        const anterior = o ? o.nombre : '';
+        const t = o || { id: R.uid() };
+        Object.assign(t, {
+          nombre, clave: f.clave.value.trim().toUpperCase().replace(/\s+/g, ''), direccion: f.direccion.value.trim(), estatus: f.estatus.value,
+          residente: { nombre: f.rnombre.value.trim(), telefono: f.rtel.value.trim(), correo: f.rcorreo.value.trim() }
+        });
+        toca(t);
+        if (nueva) D.obras.push(t);
+        if (!(await guardar())) return;
+        await syncListaObras(anterior, nombre);
+        api.closeDrawer(true); toast(nueva ? 'Obra agregada.' : 'Obra actualizada.'); api.rerender();
+      });
+    });
+  }
+
+  function noEncontrado(t, txt, href, back) {
+    return { title: 'No encontrado', html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">${esc(t)}</h2><p class="muted">${esc(txt)}</p><a class="btn" href="${href}"><span>${esc(back)}</span>${api.ARR}</a></div></section>`, bind() { } };
+  }
+
+  /* =========================================================
+     PDF (impresión) y Excel con el formato en papel
+     ========================================================= */
+  const filasFormato = r => { const out = []; for (let i = 0; i < Math.max(30, r.partidas.length); i++) out.push(r.partidas[i] || null); return out; };
+  const tituloFormato = r => `REQUISICIÓN DE MATERIALES ${String((obra(r.obraId) || {}).nombre || '').toUpperCase()}${r.tipo === 'extraordinaria' ? ' (EXTRAORDINARIA)' : ''}`;
+  const COLS = ['#', 'INSUMO', 'UNIDAD', 'CANTIDAD', 'FECHA DE SUMINISTRO EN OBRA', 'OBSERVACIONES GENERALES (PRESENTACION, COLOR, SUMINISTRO EN 2 PARTES, ETC).', '¿DONDE SE EMPLEARÁ ESTE MATERIAL?'];
+  const FIRMAS = ['NOMBRE Y FIRMA DE ENCARGADO DE OBRA', 'NOMBRE Y FIRMA CONTRATISTA O CABO DE OBRA'];
+
+  function imprimir(r) {
+    const proc = D.config.proceso;
+    $('#print').innerHTML = `<div class="pf">
+      <div class="pf-h"><div class="pf-logo">${api.logoSVG()}</div><div class="pf-t"><h1>${esc(tituloFormato(r))}</h1><p><span>SEMANA: ${r.semana}</span><span>CORTE: ${esc(corte(r))}</span></p></div></div>
+      <table><colgroup><col style="width:4%"><col style="width:22%"><col style="width:7%"><col style="width:7%"><col style="width:8%"><col style="width:31%"><col style="width:21%"></colgroup>
+        <thead><tr>${COLS.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${filasFormato(r).map((p, i) => `<tr><td>${i + 1}</td><td>${p ? esc(p.insumo) : ''}</td><td>${p ? esc(p.unidad) : ''}</td><td>${p ? qty(p.cantidad) : ''}</td><td>${p ? ddmmyy(suministro(r, p)) : ''}</td><td>${p ? esc(p.observaciones) : ''}</td><td>${p ? esc(p.destino) : ''}</td></tr>`).join('')}</tbody>
+      </table>
+      <div class="pf-firmas">${FIRMAS.map(t => `<div>${t}</div>`).join('')}</div>
+      ${proc.length ? `<h2>PROCESO DE ENVIO DE REQUISICIONES:</h2><ol>${proc.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
+    </div>`;
+    const t0 = document.title;
+    document.title = `Requisicion ${r.folio}`;   // nombre sugerido del PDF
+    document.body.classList.add('printing');
+    const fin = () => { document.title = t0; document.body.classList.remove('printing'); removeEventListener('afterprint', fin); };
+    addEventListener('afterprint', fin);
+    setTimeout(() => print(), 60);
+  }
+  function excel(r) {
+    const proc = D.config.proceso;
+    const td = (v, s = '') => `<td style="border:.5pt solid #000;text-align:center;vertical-align:middle;font-size:9pt;${s}">${v}</td>`;
+    const th = v => `<td style="border:.5pt solid #000;background:#D0CECE;font-weight:bold;text-align:center;vertical-align:middle;font-size:9pt;white-space:normal">${esc(v)}</td>`;
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8">
+      <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>${esc(r.folio)}</x:Name><x:WorksheetOptions><x:Print><x:ValidPrinterInfo/></x:Print></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
+      <body><table style="border-collapse:collapse;font-family:Calibri">
+      <col width="32"><col width="250"><col width="70"><col width="74"><col width="84"><col width="330"><col width="230">
+      <tr><td colspan="2" rowspan="2" style="font-size:20pt;font-weight:bold;color:#1d1d1b;letter-spacing:4pt">GALITHA</td><td colspan="5" style="text-align:center;font-weight:bold;font-size:13pt">${esc(tituloFormato(r))}</td></tr>
+      <tr><td colspan="2" style="text-align:center;font-weight:bold;font-size:9pt">SEMANA: ${r.semana}</td><td colspan="3" style="text-align:center;font-weight:bold;font-size:9pt">CORTE: ${esc(corte(r))}</td></tr>
+      <tr><td colspan="7"></td></tr>
+      <tr style="height:44pt">${COLS.map(th).join('')}</tr>
+      ${filasFormato(r).map((p, i) => `<tr>${td(i + 1)}${td(p ? esc(p.insumo) : '')}${td(p ? esc(p.unidad) : '')}${td(p ? p.cantidad : '')}${td(p ? ddmmyy(suministro(r, p)) : '', "mso-number-format:'\\@'")}${td(p ? esc(p.observaciones) : '')}${td(p ? esc(p.destino) : '')}</tr>`).join('')}
+      <tr><td colspan="7" style="height:40pt"></td></tr>
+      <tr><td></td><td colspan="2" style="border-top:.5pt solid #000;text-align:center;font-weight:bold;font-size:9pt">${FIRMAS[0]}</td><td colspan="2"></td><td colspan="2" style="border-top:.5pt solid #000;text-align:center;font-weight:bold;font-size:9pt">${FIRMAS[1]}</td></tr>
+      <tr><td colspan="7"></td></tr>
+      ${proc.length ? `<tr><td></td><td colspan="6" style="font-weight:bold;font-size:9pt">PROCESO DE ENVIO DE REQUISICIONES:</td></tr>${proc.map((t, i) => `<tr><td style="text-align:center;vertical-align:top;font-size:8pt">${i + 1}</td><td colspan="6" style="font-size:8pt;white-space:normal;vertical-align:top">${esc(t)}</td></tr>`).join('')}` : ''}
+      </table></body></html>`;
+    api.descargar(`Requisicion ${r.folio}.xls`, '﻿' + html, 'application/vnd.ms-excel');
+    toast('Excel descargado. Si Excel avisa que el formato es de otra versión, ábrelo de todos modos.');
+  }
+
+  /* =========================================================
+     GANCHOS PARA LA APP
+     ========================================================= */
+  // Ficha del proveedor: compras registradas con él
+  function fichaProveedor(p) {
+    cargar();
+    const cs = D.compras.filter(c => { const d = enDirectorio(c); return d && d.id === p.id; }).sort((a, b) => wkKey(b) - wkKey(a));
+    if (!cs.length) return '';
+    const pag = cs.filter(c => c.pago).reduce((a, c) => a + c.pago.monto, 0);
+    return `<section class="panel rv" style="--d:240">
+      <header class="panel-h"><h2>Compras <span class="mono n">${pad(cs.length)}</span></h2><span class="muted small">Pagado: <b>${money(pag)}</b></span></header>
+      <div class="panel-b"><ul class="tlist">${cs.slice(0, 8).map(c => `<li class="tline"><a class="tmail link-u" href="#/c/${esc(c.id)}">S${c.semana} · ${esc((obra(c.obraId) || {}).nombre || '')}${c.factura && c.factura.folio ? ' · ' + esc((c.factura.serie || '') + ' ' + c.factura.folio) : ''}</a><span class="tacts"><b class="tnum">${money(montoCompra(c))}</b>${st(compraEstado(c), true)}</span></li>`).join('')}</ul>
+      ${cs.length > 8 ? `<p class="muted small" style="margin:10px 0 0">y ${cs.length - 8} más en <a class="link-u" href="#/compras">Compras y facturas</a>.</p>` : ''}</div>
+    </section>`;
+  }
+
+  // Respaldo y datos: panel propio
+  function datosPanel() {
+    cargar();
+    const m = R.meta();
+    const n = [D.obras.length, D.requisiciones.length, D.compras.length, D.compras.filter(c => c.factura && c.factura.uuid).length];
+    return `<div class="d-grid d-grid--even r-datos">
+      <div class="d-main">${api.panel('05', 'Requisiciones, obras y compras', `
+        <ul class="imp-n"><li><b>${n[0]}</b><span>obras</span></li><li><b>${n[1]}</b><span>requisiciones</span></li><li><b>${n[2]}</b><span>compras</span></li><li><b>${n[3]}</b><span>facturas con XML</span></li></ul>
+        ${api.dl([
+          ['Último cambio', m.ultimoCambio ? esc(fDateT(localISO(m.ultimoCambio))) : '—'],
+          ['Último respaldo', m.ultimoRespaldo ? esc(fDateT(localISO(m.ultimoRespaldo))) : 'Nunca'],
+          ['Espacio usado', `${(m.bytes * 2 / 1024).toFixed(1)} KB`]
+        ])}
+        <p class="muted small">Se respaldan aparte del directorio. El JSON se importa en el mismo recuadro de "Importar".</p>
+        <div class="acts">
+          <button class="btn btn--solid" type="button" data-r-exp${R.vacio() ? ' disabled' : ''}>${I.down}<span>Exportar JSON de requisiciones</span></button>
+          <button class="btn btn--danger" type="button" data-r-del${R.vacio() ? ' disabled' : ''}>${I.trash}<span>Borrar requisiciones y compras</span></button>
+        </div>`, '', 260)}</div>
+      <div class="d-side">${api.panel('06', 'Datos de la empresa para las facturas', `
+        <p class="muted small">Se usan para revisar que cada XML esté a nombre de la empresa y para imprimir el "Proceso de envío" en el formato. Vienen en el respaldo de requisiciones.</p>
+        ${api.dl([['Empresa', esc(D.config.empresa.nombre || '—')], ['RFC', D.config.empresa.rfc ? `<span class="mono">${esc(D.config.empresa.rfc)}</span>` : '—'], ['Correo de requisiciones', esc(D.config.empresa.correoRequisiciones || '—')], ['Proceso de envío', D.config.proceso.length ? D.config.proceso.length + ' puntos' : '—']])}`, '', 300)}</div>
+    </div>`;
+  }
+  function datosBind(root) {
+    const ex = $('[data-r-exp]', root);
+    if (ex) ex.addEventListener('click', async () => {
+      const d = R.exportar();
+      api.descargar(`galitha-requisiciones-${today()}.json`, JSON.stringify(d, null, 2), 'application/json');
+      await R.marcarRespaldo(); toast(`Respaldo exportado: ${d.requisiciones.length} requisiciones y ${d.compras.length} compras.`); api.rerender();
+    });
+    const del = $('[data-r-del]', root);
+    if (del) del.addEventListener('click', async () => {
+      if (await api.confirmar({ titulo: 'Borrar requisiciones y compras', texto: 'Se eliminarán obras, requisiciones y compras de este navegador. No toca el directorio de proveedores. Exporta un respaldo antes.', ok: 'Borrar', peligro: true, escribir: 'BORRAR' })) {
+        await R.borrarTodo(); cargar(); toast('Se borraron requisiciones, obras y compras.'); api.rerender();
+      }
+    });
+  }
+  function importarArchivo(data, nombreArchivo, out) {
+    const a = R.analizar(data);
+    if (!a.ok) { out.innerHTML = `<p class="warn">${I.alert}${esc(a.error)}</p>`; return; }
+    out.innerHTML = `<div class="imp">
+      <p class="mono imp-f">${esc(nombreArchivo)} · respaldo de requisiciones${a.exportadoEn ? ` · ${esc(a.exportadoEn.slice(0, 10))}` : ''}</p>
+      <ul class="imp-n"><li><b>${a.obras}</b><span>obras</span></li><li><b>${a.requisiciones}</b><span>requisiciones</span></li><li><b>${a.compras}</b><span>compras</span></li></ul>
+      <div class="acts">
+        <button class="btn btn--solid" type="button" data-rimp="combinar"><span>Combinar</span>${api.ARR}</button>
+        <button class="btn btn--danger" type="button" data-rimp="reemplazar"><span>Reemplazar requisiciones</span></button>
+      </div>
+      <p class="muted small"><b>Combinar</b> suma lo del archivo y, si un registro existe en ambos lados, conserva el editado más recientemente. <b>Reemplazar</b> deja solo lo del archivo. El directorio de proveedores no se toca.</p>
+    </div>`;
+    $$('[data-rimp]', out).forEach(b => b.addEventListener('click', async () => {
+      const modo = b.dataset.rimp;
+      if (modo === 'reemplazar' && !R.vacio() && !(await api.confirmar({ titulo: 'Reemplazar requisiciones', texto: 'Las obras, requisiciones y compras actuales se sustituirán por las del archivo.', ok: 'Reemplazar', peligro: true }))) return;
+      try {
+        await R.importar(a.datos, modo); cargar();
+        for (const o of D.obras) await syncListaObras('', o.nombre);
+        toast(`Importado: ${D.requisiciones.length} requisiciones y ${D.compras.length} compras.`);
+        api.rerender();
+      } catch (e) { toast('No se pudo guardar: ' + e.message); }
+    }));
+  }
+
+  function chrome() {
+    cargar();
+    const hw = hoyWk();
+    $$('[data-rcount="req"]').forEach(el => { el.textContent = D.requisiciones.filter(r => r.anio === hw.anio && r.semana === hw.semana && visibleObra(r.obraId)).length || ''; });
+    $$('[data-rcount="pend"]').forEach(el => { el.textContent = D.compras.filter(c => c.factura && !c.pago && visibleObra(c.obraId)).length || ''; });
+    if (!$('[data-rol]')) pintarRol();
+  }
+
+  return {
+    pages: { requisiciones: pageReqs, r: pageReq, compras: pageCompras, c: pageCompra, obras: pageObras },
+    nav: { r: 'requisiciones', c: 'compras' },
+    titulos: { requisiciones: 'Requisiciones', compras: 'Compras', obras: 'Obras' },
+    acciones: {
+      requisiciones: { label: 'Nueva requisición', act: 'nueva-req' },
+      compras: { label: 'Nueva requisición', act: 'nueva-req' },
+      obras: { label: 'Agregar obra', act: 'nueva-obra' }
+    },
+    onAct(a, el) {
+      if (a === 'nueva-req') drReq(null);
+      if (a === 'nueva-obra') drObra(null);
+    },
+    chrome, fichaProveedor, datosPanel, datosBind,
+    importa: data => !!data && data.formato === R.FORMATO,
+    importarArchivo
+  };
+});
