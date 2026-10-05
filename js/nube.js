@@ -230,6 +230,7 @@
     puede(accion) { return !!perfil && (PERMISOS[accion] || []).includes(perfil.rol); },
     nombreDe(id) { const p = id && perfiles.get(id); return p ? (p.nombre || p.correo) : ''; },
     perfiles: () => [...perfiles.values()],
+    async recargarPerfiles() { try { await cargarPerfiles(); } catch { /* se queda con la lista anterior */ } },
     async salir() { await sb.auth.signOut(); location.reload(); }
   };
 })();

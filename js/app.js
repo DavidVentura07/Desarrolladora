@@ -577,6 +577,7 @@
 
   async function pageDetalle({ id }) {
     await refresh();
+    for (const m of MODS) if (m.cargar) await m.cargar(); // compras con este proveedor
     const p = DATA.find(x => x.id === id);
     if (!p) {
       return {
@@ -674,6 +675,7 @@
 
   async function pageDatos() {
     await refresh();
+    for (const m of MODS) if (m.cargar) await m.cargar();
     const m = S.meta();
     const r = respaldoEstado();
     const contactos = DATA.reduce((n, p) => n + p.contactos.length, 0);
@@ -1493,6 +1495,45 @@
     });
   }
 
+  // Pide un dato en una ventana: devuelve el texto (o null si se cancela)
+  function preguntar({ titulo, texto = '', etiqueta = '', campo = 'texto', valor = '', ok = 'Guardar', requerido = false, peligro = false }) {
+    return new Promise(resolve => {
+      const prevFocus = document.activeElement;
+      const box = $('.md-box', modal);
+      const input = campo === 'area'
+        ? `<textarea class="in md-in" rows="4">${esc(valor)}</textarea>`
+        : `<input class="in md-in" ${campo === 'numero' ? 'type="number" min="0" step="0.01" inputmode="decimal"' : campo === 'fecha' ? 'type="date"' : ''} value="${esc(valor)}" autocomplete="off">`;
+      box.innerHTML = `
+        <p class="mono md-k">${peligro ? 'Confirmar acción' : 'Dato'}</p>
+        <h2 id="md-title">${esc(titulo)}</h2>
+        ${texto ? `<p class="md-t">${texto}</p>` : ''}
+        <label class="fld">${etiqueta ? `<span class="fld-l">${esc(etiqueta)}</span>` : ''}${input}</label>
+        <div class="md-a">
+          <button class="btn" data-r="0"><span>Cancelar</span></button>
+          <button class="btn ${peligro ? 'btn--danger-solid' : 'btn--solid'}" data-r="1"${requerido && !valor ? ' disabled' : ''}><span>${esc(ok)}</span></button>
+        </div>`;
+      modal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('modal-open');
+      const okBtn = $('[data-r="1"]', box), inp = $('.md-in', box);
+      if (requerido) inp.addEventListener('input', () => { okBtn.disabled = !inp.value.trim(); });
+      setTimeout(() => { inp.focus(); if (inp.select) inp.select(); }, 50);
+      const done = r => {
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('modal-open');
+        box.removeEventListener('click', onClick); document.removeEventListener('keydown', onKey, true);
+        if (prevFocus && document.contains(prevFocus)) prevFocus.focus();
+        resolve(r ? inp.value.trim() : null);
+      };
+      const onClick = e => { const b = e.target.closest('[data-r]'); if (b && !b.disabled) done(b.dataset.r === '1'); };
+      const onKey = e => {
+        if (e.key === 'Escape') { e.stopPropagation(); done(false); }
+        if (e.key === 'Enter' && campo !== 'area' && !okBtn.disabled) { e.preventDefault(); done(true); }
+      };
+      box.addEventListener('click', onClick);
+      document.addEventListener('keydown', onKey, true);
+    });
+  }
+
   let toastT;
   function toast(msg) {
     const t = $('.toast'); t.textContent = msg; t.classList.add('on');
@@ -1522,7 +1563,7 @@
      como una función que recibe esta API y devuelve sus páginas y ganchos. */
   const API = {
     esc, norm, digits, pad, ico, I, ARR, markSVG, logoSVG, today, mobileMQ, reduced,
-    toast, confirmar, rerender: () => rerender(), openPanel, closeDrawer, markDirty, descargar, panel, dl,
+    toast, confirmar, preguntar, rerender: () => rerender(), iniciales, openPanel, closeDrawer, markDirty, descargar, panel, dl,
     refresh: () => refresh(), proveedores: () => DATA, listas: () => LISTAS, nombreProveedor: nombre, Store: S
   };
   const MODS = (window.GALITHA_MODULOS || []).map(f => f(API)).filter(Boolean);
@@ -1532,7 +1573,7 @@
   });
   function accionPrincipal(route) {
     const a = ACCIONES[route] || ACCIONES[''];
-    const oculto = a.act === 'nuevo' && !puedeDir();
+    const oculto = (a.act === 'nuevo' && !puedeDir()) || (a.puede && !a.puede());
     $$('[data-main-act]').forEach(b => {
       b.hidden = oculto;
       b.dataset.act = a.act;
@@ -1650,7 +1691,7 @@
   });
 
   // Si otra pestaña modifica los datos, se refleja aquí al volver
-  addEventListener('storage', e => { if (e.key && (e.key.startsWith('galitha.directorio') || e.key.startsWith('galitha.requisiciones')) && !document.body.classList.contains('drawer-open')) rerender(); });
+  addEventListener('storage', e => { if (e.key && e.key.startsWith('galitha.directorio') && !document.body.classList.contains('drawer-open')) rerender(); });
 
   /* =========================================================
      ARRANQUE
