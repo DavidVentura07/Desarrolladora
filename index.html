@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Galitha · Plataforma interna</title>
-<meta name="description" content="Plataforma interna de Galitha: proveedores, requisiciones de obra y compras — uso interno.">
+<meta name="description" content="Plataforma interna de Galitha: obras, requisiciones, compras y proveedores — uso interno.">
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#F1F2F8">
 <!-- Instalable en la pantalla de inicio (iPhone/iPad y Android). El nombre bajo el ícono es apple-mobile-web-app-title y short_name del manifiesto -->
@@ -28,7 +28,7 @@
 <div id="loader" aria-hidden="true">
   <div class="loader-mark"></div>
   <div class="loader-meta">
-    <span class="mono">Directorio de proveedores</span>
+    <span class="mono">Plataforma interna</span>
     <span class="mono loader-count">000</span>
   </div>
 </div>
@@ -42,32 +42,36 @@
 <div class="shell">
   <!-- Barra lateral flotante (escritorio) -->
   <aside class="side" aria-label="Plataforma">
-    <a href="#/" class="side-logo" aria-label="Galitha, directorio de proveedores"></a>
+    <a href="#/inicio" class="side-logo" aria-label="Galitha, inicio"></a>
     <p class="side-app">Plataforma interna</p>
     <nav class="side-nav" aria-label="Módulos">
-      <a href="#/" data-route=""><span data-ico="users"></span><span>Proveedores</span><b data-count></b></a>
+      <a href="#/inicio" data-route="inicio"><span data-ico="home"></span><span>Inicio</span></a>
+      <a href="#/obras" data-route="obras"><span data-ico="building"></span><span>Obras</span></a>
       <a href="#/requisiciones" data-route="requisiciones"><span data-ico="clip"></span><span>Requisiciones</span><b data-rcount="req"></b></a>
       <a href="#/compras" data-route="compras"><span data-ico="receipt"></span><span>Compras y facturas</span><b data-rcount="pend"></b></a>
-      <a href="#/obras" data-route="obras"><span data-ico="building"></span><span>Obras</span></a>
-      <a href="#/listas" data-route="listas"><span data-ico="listas"></span><span>Listas y opciones</span></a>
+      <a href="#/" data-route=""><span data-ico="users"></span><span>Proveedores</span><b data-count></b></a>
       <a href="#/usuarios" data-route="usuarios" class="solo-jefes"><span data-ico="shield"></span><span>Usuarios</span></a>
+      <i class="side-sep solo-jefes" aria-hidden="true"></i>
       <a href="#/datos" data-route="datos" class="solo-jefes"><span data-ico="db"></span><span>Respaldo y datos</span></a>
     </nav>
     <div class="side-soon">
       <p>Muy pronto</p>
       <span><i data-ico="chart"></i>Erogaciones y avance</span>
-      <span><i data-ico="user"></i>Clientes</span>
+      <span><i data-ico="contrato"></i>Contratos de obra</span>
+      <span><i data-ico="colado"></i>Programación de colados</span>
+      <span><i data-ico="sello"></i>Trámites y licencias</span>
+      <span><i data-ico="llave"></i>Ventas</span>
     </div>
     <div class="side-foot">
       <a href="#/datos" class="backup solo-jefes" data-backup></a>
       <div class="me" data-yo></div>
-      <span class="side-ver">v0.5 · en línea</span>
+      <span class="side-ver">v0.6 · en línea</span>
     </div>
   </aside>
 
   <!-- Barra superior (móvil) -->
   <header class="topbar">
-    <a href="#/" class="top-logo" aria-label="Galitha, inicio"></a>
+    <a href="#/inicio" class="top-logo" aria-label="Galitha, inicio"></a>
     <span class="top-title">Proveedores</span>
     <button class="nav-burger" aria-label="Abrir menú" aria-expanded="false"><i></i><i></i></button>
   </header>
@@ -86,20 +90,20 @@
 <!-- Menú móvil -->
 <div id="menu" aria-hidden="true">
   <nav>
-    <a href="#/" data-route=""><small>01</small>Proveedores</a>
-    <a href="#/requisiciones" data-route="requisiciones"><small>02</small>Requisiciones</a>
-    <a href="#/compras" data-route="compras"><small>03</small>Compras</a>
-    <a href="#/obras" data-route="obras"><small>04</small>Obras</a>
-    <a href="#/listas" data-route="listas"><small>05</small>Listas</a>
-    <a href="#/datos" data-route="datos" class="solo-jefes"><small>06</small>Respaldo</a>
-    <a href="#/usuarios" data-route="usuarios" class="solo-jefes"><small>07</small>Usuarios</a>
+    <a href="#/inicio" data-route="inicio"><small>01</small>Inicio</a>
+    <a href="#/obras" data-route="obras"><small>02</small>Obras</a>
+    <a href="#/requisiciones" data-route="requisiciones"><small>03</small>Requisiciones</a>
+    <a href="#/compras" data-route="compras"><small>04</small>Compras</a>
+    <a href="#/" data-route=""><small>05</small>Proveedores</a>
+    <a href="#/usuarios" data-route="usuarios" class="solo-jefes"><small>06</small>Usuarios</a>
+    <a href="#/datos" data-route="datos" class="solo-jefes"><small>07</small>Respaldo</a>
   </nav>
   <div class="menu-foot"><div class="me me--menu" data-yo></div><span>Galitha · Plataforma interna</span><span class="solo-jefes" data-backup-text></span></div>
 </div>
 
 <!-- Barra inferior (móvil) -->
 <nav class="tabbar" aria-label="Navegación">
-  <a href="#/" data-route=""><span data-ico="users"></span>Proveedores</a>
+  <a href="#/obras" data-route="obras"><span data-ico="building"></span>Obras</a>
   <a href="#/requisiciones" data-route="requisiciones"><span data-ico="clip"></span>Requisiciones</a>
   <button class="tab-add" type="button" data-act="nuevo" data-main-act aria-label="Nuevo proveedor"><span data-ico="plus"></span></button>
   <a href="#/compras" data-route="compras"><span data-ico="receipt"></span>Compras</a>
@@ -130,6 +134,7 @@
 <script src="js/store-req.js"></script>
 <script src="js/requisiciones.js"></script>
 <script src="js/usuarios.js"></script>
+<script src="js/inicio.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

@@ -129,6 +129,11 @@
     chevron: ico('<path d="M6 9l6 6 6-6"/>'),
     arrow: ico('<path d="M5 12h14M13 6l6 6-6 6"/>'),
     cal: ico('<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
+    // "Muy pronto" (v0.6)
+    contrato: ico('<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 11h6M9 14h4"/><path d="M9 18.2c1-1.4 1.8-1.4 2.4 0s1.4 1.4 2.6-.4"/>'),
+    colado: ico('<path d="M3 17h11l3-5h3.5V17H20"/><path d="M5.5 17V9.5l7-2.5 1.5 4.5L6 14"/><circle cx="7" cy="18.5" r="1.8"/><circle cx="17" cy="18.5" r="1.8"/>'),
+    sello: ico('<path d="M9.5 13.5V10a2.5 2.5 0 1 1 5 0v3.5"/><path d="M5 13.5h14l1 3.5H4z"/><path d="M6 20.5h12"/>'),
+    llave: ico('<circle cx="8" cy="15" r="4"/><path d="M11 12l8.5-8.5M16.5 6.5l2 2M14.5 8.5l1.5 1.5"/>'),
     logout: ico('<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>'),
     // Vistas del listado
     vCompactas: ico('<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>'),
@@ -1598,6 +1603,7 @@
     const route = r.page in NAV ? NAV[r.page] : (pages[r.page] ? r.page : '');
     $$('.side-nav a, #menu nav a, .tabbar a').forEach(a => a.classList.toggle('active', a.dataset.route === route));
     $('.top-title').textContent = TITULOS[route] || 'Proveedores';
+    document.body.classList.toggle('en-inicio', route === 'inicio');
     document.body.dataset.page = r.page === 'p' ? 'ficha' : (route || 'lista');
     accionPrincipal(route);
     if (out.bind) out.bind(view.firstElementChild);
@@ -1726,9 +1732,17 @@
     if (await confirmar({ titulo: 'Cerrar sesión', texto: 'Para volver a entrar te enviaremos un acceso nuevo a tu correo.', ok: 'Cerrar sesión' })) N.salir();
   });
 
-  if (!location.hash) history.replaceState(null, '', '#/');
+  // Sin ruta se abre Obras (primera sección desde la v0.6)
+  if (!location.hash) history.replaceState(null, '', '#/obras');
   const primera = !session.get('galitha.visto', false) && !reduced;
-  N.iniciar().then(() => { pintarUsuario(); go(); });
+  // Bienvenida (js/inicio.js): una vez por sesión, después de entrar; "Entrar" lleva a Obras
+  const BV = (MODS.find(m => m.bienvenida) || {}).bienvenida;
+  let loaderListo; const loaderTermina = new Promise(r => { loaderListo = r; });
+  N.iniciar().then(() => {
+    pintarUsuario();
+    if (BV && BV.pendiente()) BV.abrir(loaderTermina);
+    go();
+  });
 
   const loader = $('#loader');
   const finish = () => {
@@ -1736,6 +1750,7 @@
     document.body.classList.remove('is-loading');
     document.body.classList.add('ready');
     session.set('galitha.visto', true);
+    loaderListo();
     setTimeout(() => loader.remove(), 1300);
   };
   if (!primera) { loader.classList.add('skip'); finish(); }
