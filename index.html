@@ -51,7 +51,8 @@
     </div>
     <div class="side-foot">
       <a href="#/datos" class="backup" data-backup></a>
-      <span class="side-ver">v0.3 · local</span>
+      <div class="me" data-yo></div>
+      <span class="side-ver">v0.4 · en línea</span>
     </div>
   </aside>
 
@@ -85,7 +86,7 @@
     <a href="#/listas" data-route="listas"><small>05</small>Listas</a>
     <a href="#/datos" data-route="datos"><small>06</small>Respaldo</a>
   </nav>
-  <div class="menu-foot"><span>Galitha · Plataforma interna</span><span data-backup-text></span><div class="seg rol" role="group" aria-label="Ver como" data-rol-switch></div></div>
+  <div class="menu-foot"><div class="me me--menu" data-yo></div><span>Galitha · Plataforma interna</span><span data-backup-text></span><div class="seg rol" role="group" aria-label="Ver como" data-rol-switch></div></div>
 </div>
 
 <!-- Barra inferior (móvil) -->
@@ -114,9 +115,10 @@
 <!-- Formato de impresión (PDF) de la requisición: réplica del formato en papel -->
 <div id="print" aria-hidden="true"></div>
 
+<script src="js/vendor/supabase-2.117.2.js"></script>
+<script src="js/nube.js"></script>
 <script src="js/catalogos.js"></script>
 <script src="js/store.js"></script>
-<script src="js/ejemplo.js"></script>
 <script src="js/store-req.js"></script>
 <script src="js/requisiciones.js"></script>
 <script src="js/app.js"></script>

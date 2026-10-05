@@ -7,6 +7,9 @@
 (() => {
   const C = window.CAT;
   const S = window.Store;
+  const N = window.Nube;
+  // Qué botones se muestran según el rol (la base de datos vuelve a revisar cada cambio)
+  const puedeDir = () => N.puede('directorio');
   const $ = (s, c = document) => c.querySelector(s);
   const $$ = (s, c = document) => [...c.querySelectorAll(s)];
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -126,6 +129,7 @@
     chevron: ico('<path d="M6 9l6 6 6-6"/>'),
     arrow: ico('<path d="M5 12h14M13 6l6 6-6 6"/>'),
     cal: ico('<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
+    logout: ico('<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>'),
     // Vistas del listado
     vCompactas: ico('<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>'),
     vAmplias: ico('<rect x="3.5" y="4" width="7.5" height="16" rx="1.5"/><rect x="13" y="4" width="7.5" height="16" rx="1.5"/>'),
@@ -174,7 +178,7 @@
     return [b(wa && waHref(wa.numero), I.wa, 'WhatsApp', true), b(tel && telHref(tel.numero), I.phone, 'Llamar'), b(mailHref(mail), I.mail, 'Correo')]
       .filter(Boolean).slice(0, max).join('');
   };
-  const favBtn = p => `<button class="fav${p.favorito ? ' on' : ''}" data-fav="${esc(p.id)}" aria-pressed="${p.favorito}" aria-label="${p.favorito ? 'Quitar de favoritos' : 'Marcar como favorito'}" title="Favorito">${I.star}</button>`;
+  const favBtn = p => !puedeDir() ? (p.favorito ? `<span class="fav on is-ro" title="Favorito" aria-label="Favorito">${I.star}</span>` : '') : `<button class="fav${p.favorito ? ' on' : ''}" data-fav="${esc(p.id)}" aria-pressed="${p.favorito}" aria-label="${p.favorito ? 'Quitar de favoritos' : 'Marcar como favorito'}" title="Favorito">${I.star}</button>`;
 
   /* =========================================================
      DATOS EN MEMORIA + CROMO (barra lateral)
@@ -428,12 +432,11 @@
         <div class="empty-mark">${markSVG()}</div>
         <p class="eyebrow">Directorio vacío</p>
         <h2 class="h2">Aún no hay proveedores</h2>
-        <p class="muted">Agrega el primero, importa un respaldo JSON o carga algunos datos de ejemplo para probar la página.</p>
-        <div class="empty-acts">
+        <p class="muted">${puedeDir() ? 'Agrega el primero o importa un respaldo JSON.' : 'Todavía no se ha registrado ningún proveedor.'}</p>
+        ${puedeDir() ? `<div class="empty-acts">
           <button class="btn btn--solid" data-act="nuevo"><span>Agregar proveedor</span>${ARR}</button>
           <a class="btn" href="#/datos"><span>Importar respaldo</span>${ARR}</a>
-          <button class="link-u" data-act="ejemplo">Cargar datos de ejemplo</button>
-        </div>
+        </div>` : ''}
       </div>`;
   }
 
@@ -557,7 +560,7 @@
             <h3>${esc(c.nombre || 'Sin nombre')}${c.activo ? '' : ' <span class="tag tag--off">Ya no está</span>'}</h3>
             <p class="sub">${esc([c.puesto, c.area].filter(Boolean).join(' · ') || 'Sin puesto')}</p>
           </div>
-          <div class="ct-btns">
+          <div class="ct-btns"${puedeDir() ? '' : ' hidden'}>
             <button class="ibtn" data-act="editar-contacto" data-cid="${esc(c.id)}" title="Editar contacto" aria-label="Editar a ${esc(c.nombre)}">${I.edit}</button>
             <button class="ibtn" data-act="borrar-contacto" data-cid="${esc(c.id)}" title="Eliminar contacto" aria-label="Eliminar a ${esc(c.nombre)}">${I.trash}</button>
           </div>
@@ -597,8 +600,8 @@
             </div>
             <div class="d-actions">
               ${favBtn(p)}
-              <button class="btn btn--solid" data-act="editar">${I.edit}<span>Editar</span></button>
-              <button class="ibtn ibtn--line" data-act="borrar" title="Eliminar proveedor" aria-label="Eliminar proveedor">${I.trash}</button>
+              ${puedeDir() ? `<button class="btn btn--solid" data-act="editar">${I.edit}<span>Editar</span></button>` : ''}
+              ${N.puede('borrarProveedor') ? `<button class="ibtn ibtn--line" data-act="borrar" title="Eliminar proveedor" aria-label="Eliminar proveedor">${I.trash}</button>` : ''}
             </div>
           </div>
           <div class="quickbar">${quick(p, true)}${web ? `<a class="qbtn" href="${esc(web)}" target="_blank" rel="noopener">${I.web}<span>Sitio web</span></a>` : ''}${maps ? `<a class="qbtn" href="${esc(maps)}" target="_blank" rel="noopener">${I.map}<span>Mapa</span></a>` : ''}</div>
@@ -613,7 +616,7 @@
 
             ${panel('02', `Contactos <span class="mono n">${pad(p.contactos.length)}</span>`,
               p.contactos.length ? `<div class="contacts">${p.contactos.map(c => contactoHTML(p, c)).join('')}</div>` : nada('Todavía no hay contactos registrados para este proveedor.'),
-              `<button class="tbtn tbtn--sm" data-act="nuevo-contacto">${I.plus}<span>Agregar contacto</span></button>`, 180)}
+              puedeDir() ? `<button class="tbtn tbtn--sm" data-act="nuevo-contacto">${I.plus}<span>Agregar contacto</span></button>` : '', 180)}
 
             ${panel('03', 'Obras en las que ha participado', p.obras.length ? `<ul class="obras">${p.obras.map(o => `<li>${esc(o)}</li>`).join('')}</ul>` : nada('Sin obras registradas.'), '', 220)}
             ${MODS.map(m => (m.fichaProveedor ? m.fichaProveedor(p) : '')).join('')}
@@ -651,12 +654,12 @@
           if (act === 'borrar-contacto') {
             const c = p.contactos.find(x => x.id === b.dataset.cid);
             if (await confirmar({ titulo: 'Eliminar contacto', texto: `Se eliminará a <b>${esc(c.nombre || 'este contacto')}</b> de ${esc(nombre(p))}. Si solo dejó de trabajar ahí, puedes editarlo y marcarlo como "ya no está".`, ok: 'Eliminar', peligro: true })) {
-              await S.removeContacto(p.id, c.id); toast('Contacto eliminado.'); rerender();
+              try { await S.removeContacto(p.id, c.id); toast('Contacto eliminado.'); rerender(); } catch (err) { toast(err.message); }
             }
           }
           if (act === 'borrar') {
-            if (await confirmar({ titulo: 'Eliminar proveedor', texto: `Se eliminará <b>${esc(nombre(p))}</b> con sus ${p.contactos.length} contacto(s). Esta acción no se puede deshacer, salvo que tengas un respaldo JSON.`, ok: 'Eliminar proveedor', peligro: true, escribir: 'ELIMINAR' })) {
-              await S.remove(p.id); toast('Proveedor eliminado.'); location.hash = '#/';
+            if (await confirmar({ titulo: 'Eliminar proveedor', texto: `Se eliminará <b>${esc(nombre(p))}</b> con sus ${p.contactos.length} contacto(s) <b>para todos los usuarios</b>. Esta acción no se puede deshacer, salvo que tengas un respaldo JSON.`, ok: 'Eliminar proveedor', peligro: true, escribir: 'ELIMINAR' })) {
+              try { await S.remove(p.id); toast('Proveedor eliminado.'); location.hash = '#/'; } catch (err) { toast(err.message); }
             }
           }
         });
@@ -674,7 +677,6 @@
     const m = S.meta();
     const r = respaldoEstado();
     const contactos = DATA.reduce((n, p) => n + p.contactos.length, 0);
-    const kb = (m.bytes * 2 / 1024).toFixed(1); // localStorage guarda texto UTF-16
     const html = `
       <section class="page">
         <header class="page-head rv">
@@ -684,9 +686,9 @@
           </div>
         </header>
 
-        <div class="note rv" style="--d:60">
-          ${I.alert}
-          <p>Por ahora la información vive <b>solo en este navegador y en esta computadora</b>. Si se borran los datos de navegación, se pierde. Exporta un respaldo JSON con frecuencia y guárdalo en Dropbox o Drive. Para pasar los datos a otra computadora, o de la copia local a GitHub Pages, exporta aquí e importa allá.</p>
+        <div class="note note--info rv" style="--d:60">
+          ${I.db}
+          <p>El directorio vive <b>en el servidor de la plataforma</b>: todos los que tienen acceso ven la misma información, desde cualquier computadora o celular. El plan gratuito del servidor no guarda copias automáticas, así que conviene <b>exportar un respaldo JSON</b> cada semana y guardarlo en Dropbox o Drive.</p>
         </div>
 
         <div class="d-grid d-grid--even">
@@ -697,8 +699,7 @@
                 ['Proveedores', pad(DATA.length)],
                 ['Contactos', pad(contactos)],
                 ['Último cambio', m.ultimoCambio ? `${esc(fmtDate(m.ultimoCambio))} · ${esc(ago(m.ultimoCambio))}` : '—'],
-                ['Último respaldo', m.ultimoRespaldo ? `${esc(fmtDate(m.ultimoRespaldo))} · ${esc(ago(m.ultimoRespaldo))}` : 'Nunca'],
-                ['Espacio usado', `${kb} KB <span class="muted">de ~5 MB disponibles</span>`],
+                ['Último respaldo', m.ultimoRespaldo ? `${esc(fmtDate(m.ultimoRespaldo))} · ${esc(ago(m.ultimoRespaldo))} <span class="muted">· desde este navegador</span>` : 'Nunca desde este navegador'],
                 ['Formato', `JSON · esquema v${S.SCHEMA}`]
               ])}`, '', 100)}
 
@@ -711,7 +712,7 @@
           </div>
 
           <div class="d-side">
-            ${panel('03', 'Importar', `
+            ${!puedeDir() ? '' : panel('03', 'Importar', `
               <label class="drop" id="drop">
                 <input type="file" accept=".json,application/json" id="file" hidden>
                 ${I.up}
@@ -721,12 +722,6 @@
               <p class="muted small" style="margin:10px 0 0">Acepta respaldos del directorio y de requisiciones y compras.</p>
               <div id="import-res"></div>`, '', 180)}
 
-            ${panel('04', 'Pruebas y limpieza', `
-              <p class="muted">Los datos de ejemplo son ficticios y llevan la etiqueta <b>#ejemplo</b>. Cargarlos otra vez no los duplica.</p>
-              <div class="acts">
-                <button class="btn" data-act="ejemplo"><span>Cargar datos de ejemplo</span>${ARR}</button>
-                <button class="btn btn--danger" data-act="borrar-todo"${DATA.length ? '' : ' disabled'}>${I.trash}<span>Borrar todo</span></button>
-              </div>`, '', 220)}
           </div>
         </div>
         ${MODS.map(m => (m.datosPanel ? m.datosPanel() : '')).join('')}
@@ -739,25 +734,20 @@
         pendienteImport = null;
         MODS.forEach(m => m.datosBind && m.datosBind(root));
         const file = $('#file', root), drop = $('#drop', root);
-        file.addEventListener('change', () => file.files[0] && leerArchivo(file.files[0]));
-        ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
-        ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
-        drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) leerArchivo(f); });
+        if (file) file.addEventListener('change', () => file.files[0] && leerArchivo(file.files[0]));
+        if (drop) ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+        if (drop) ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+        if (drop) drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) leerArchivo(f); });
 
         root.addEventListener('click', async e => {
           const b = e.target.closest('[data-act]'); if (!b) return;
           const act = b.dataset.act;
           if (act === 'export-json') exportarJSON();
           if (act === 'export-csv') exportarCSV();
-          if (act === 'borrar-todo') {
-            if (await confirmar({ titulo: 'Borrar todos los datos', texto: `Se eliminarán <b>${DATA.length} proveedores</b> de este navegador. Te recomendamos exportar un respaldo JSON antes.`, ok: 'Borrar todo', peligro: true, escribir: 'BORRAR' })) {
-              await S.borrarTodo(); toast('Se borraron todos los datos.'); rerender();
-            }
-          }
           if (act === 'importar') {
             if (!pendienteImport) return;
             const modo = b.dataset.modo;
-            if (modo === 'reemplazar' && !(await confirmar({ titulo: 'Reemplazar todo', texto: `Los <b>${DATA.length}</b> proveedores actuales se sustituirán por los <b>${pendienteImport.total}</b> del archivo.`, ok: 'Reemplazar', peligro: true }))) return;
+            if (modo === 'reemplazar' && !(await confirmar({ titulo: 'Reemplazar todo', texto: `Los <b>${DATA.length}</b> proveedores del servidor se borrarán y quedarán solo los <b>${pendienteImport.total}</b> del archivo, <b>para todos los usuarios</b>.`, ok: 'Reemplazar', peligro: true, escribir: 'REEMPLAZAR' }))) return;
             try {
               await S.importar(pendienteImport.incoming, modo, pendienteImport.listas);
               toast(modo === 'reemplazar' ? 'Datos reemplazados.' : 'Importación completada.');
@@ -796,10 +786,10 @@
           </ul>
           <div class="acts">
             <button class="btn btn--solid" data-act="importar" data-modo="combinar"><span>Combinar</span>${ARR}</button>
-            <button class="btn btn--danger" data-act="importar" data-modo="reemplazar"><span>Reemplazar todo</span></button>
+            ${N.puede('restaurar') ? '<button class="btn btn--danger" data-act="importar" data-modo="reemplazar"><span>Reemplazar todo</span></button>' : ''}
             <button class="link-u mono" data-act="cancelar-import">Cancelar</button>
           </div>
-          <p class="muted small"><b>Combinar</b> agrega los nuevos y, si un proveedor existe en ambos lados, conserva la versión editada más recientemente. <b>Reemplazar</b> borra lo actual y deja solo lo del archivo.</p>
+          <p class="muted small"><b>Combinar</b> agrega los nuevos y, si un proveedor existe en ambos lados, conserva la versión editada más recientemente. ${N.puede('restaurar') ? '<b>Reemplazar</b> borra lo actual y deja solo lo del archivo.' : ''}</p>
         </div>`;
     };
     reader.onerror = () => { out.innerHTML = `<p class="warn">${I.alert}No se pudo leer el archivo.</p>`; };
@@ -841,12 +831,6 @@
     toast('CSV exportado.');
   }
 
-  async function cargarEjemplo() {
-    const a = S.analizar(window.EJEMPLO || []);
-    await S.importar(a.incoming, 'combinar');
-    toast(`Se cargaron ${a.total} proveedores de ejemplo.`);
-    if (parse().page === '') rerender(); else location.hash = '#/';
-  }
 
   /* =========================================================
      FORMULARIOS (panel lateral)
@@ -1447,7 +1431,7 @@
         </header>
         <div class="note note--info rv" style="--d:60">
           ${I.listas}
-          <p>Aquí defines las opciones de los desplegables del formulario, a la medida de la oficina. Puedes <b>agregar</b>, <b>renombrar</b> (escribe sobre el nombre; se actualiza en todos los proveedores) y <b>quitar</b> opciones. También puedes hacerlo desde el formulario con el botón <b>Editar lista</b>. Las listas se guardan en el respaldo JSON.</p>
+          <p>${puedeDir() ? '' : '<b>Solo consulta:</b> tu rol puede ver estas listas, pero no modificarlas. '}Aquí se definen las opciones de los desplegables del formulario, a la medida de la oficina. Puedes <b>agregar</b>, <b>renombrar</b> (escribe sobre el nombre; se actualiza en todos los proveedores) y <b>quitar</b> opciones. También puedes hacerlo desde el formulario con el botón <b>Editar lista</b>. Las listas se guardan en el respaldo JSON.</p>
         </div>
         <div class="le-grid">${LISTAS_DEF.map((d, i) => `
           <section class="panel rv" style="--d:${100 + i * 40}">
@@ -1459,7 +1443,13 @@
     return {
       title: 'Listas y opciones',
       html,
-      bind(root) { $$('[data-le-wrap]', root).forEach(w => bindEditorLista(w, w.dataset.leWrap)); }
+      bind(root) {
+        if (puedeDir()) { $$('[data-le-wrap]', root).forEach(w => bindEditorLista(w, w.dataset.leWrap)); return; }
+        $$('[data-le-wrap]', root).forEach(w => {
+          const vals = LISTAS[w.dataset.leWrap] || [];
+          w.innerHTML = vals.length ? `<div class="chips-ro">${vals.map(v => `<span>${esc(v)}</span>`).join('')}</div>` : '<p class="none muted">Sin opciones.</p>';
+        });
+      }
     };
   }
 
@@ -1542,7 +1532,9 @@
   });
   function accionPrincipal(route) {
     const a = ACCIONES[route] || ACCIONES[''];
+    const oculto = a.act === 'nuevo' && !puedeDir();
     $$('[data-main-act]').forEach(b => {
+      b.hidden = oculto;
       b.dataset.act = a.act;
       b.setAttribute('aria-label', a.label);
       const t = $('[data-main-label]', b); if (t) t.textContent = a.label;
@@ -1611,7 +1603,7 @@
       e.preventDefault(); e.stopPropagation();
       const p = await S.get(fav.dataset.fav); if (!p) return;
       p.favorito = !p.favorito;
-      await S.save(p);
+      try { await S.save(p); } catch (err) { toast(err.message); return; }
       toast(p.favorito ? 'Agregado a favoritos.' : 'Quitado de favoritos.');
       await refresh();
       rerender(); // también actualiza el contador de favoritos del listado
@@ -1626,8 +1618,7 @@
     const act = e.target.closest('[data-act]');
     if (act && !act.closest('.detail')) {
       const a = act.dataset.act;
-      if (a === 'nuevo') { await refresh(); formProveedor(); }
-      if (a === 'ejemplo') cargarEjemplo();
+      if (a === 'nuevo' && puedeDir()) { await refresh(); formProveedor(); }
       MODS.forEach(m => m.onAct && m.onAct(a, act));
       if (a === 'limpiar') {
         Object.assign(F, FDEF, { sort: F.sort }); saveF();
@@ -1676,9 +1667,24 @@
   pintarFecha();
   setInterval(pintarFecha, 60 * 1000);
 
+  // Usuario en sesión (barra lateral y menú del celular)
+  function pintarUsuario() {
+    const p = N.perfil;
+    const html = `
+      <span class="me-av" aria-hidden="true">${esc(iniciales(p.nombre || p.correo))}</span>
+      <span class="me-id"><b>${esc(p.nombre || p.correo)}</b><small>${esc(N.ROLES[p.rol] || p.rol)}</small></span>
+      <button type="button" class="ibtn me-out" data-salir title="Cerrar sesión" aria-label="Cerrar sesión">${I.logout}</button>`;
+    $$('[data-yo]').forEach(el => { el.innerHTML = html; });
+    document.body.dataset.rol = p.rol;
+  }
+  document.addEventListener('click', async e => {
+    if (!e.target.closest('[data-salir]')) return;
+    if (await confirmar({ titulo: 'Cerrar sesión', texto: 'Para volver a entrar te enviaremos un acceso nuevo a tu correo.', ok: 'Cerrar sesión' })) N.salir();
+  });
+
   if (!location.hash) history.replaceState(null, '', '#/');
   const primera = !session.get('galitha.visto', false) && !reduced;
-  go();
+  N.iniciar().then(() => { pintarUsuario(); go(); });
 
   const loader = $('#loader');
   const finish = () => {
