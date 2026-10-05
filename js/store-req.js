@@ -83,6 +83,7 @@
         pdfArchivo: pdf || null, xmlArchivo: xml || null
       });
     }
+    if (d.tipo === 'pago') return Object.assign(base, { aviso: obj(d.datos).aviso || null });
     if (d.tipo === 'remision') return Object.assign(base, { recibio: str(obj(d.datos).recibio) || base.subidoPor });
     return base;
   };
@@ -286,6 +287,18 @@
       const filas = ok(await sb().from('compra_documentos').delete().eq('id', docId).select('id'));
       if (!filas.length) throw new Error('Tu rol no puede quitar este documento.');
       if (d) await borrarArchivos(d.archivos.map(a => a.ruta)).catch(() => {});
+    },
+    // Correo automático al residente (y suplentes vigentes) con el pago: Edge Function "aviso-pago"
+    async avisarPago(compraId) {
+      const { data, error } = await sb().functions.invoke('aviso-pago', { body: { compra_id: compraId } });
+      if (error) {
+        let msg = '';
+        try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
+        throw new Error(msg || 'No se pudo enviar el correo (¿está publicada la función "aviso-pago" en Supabase?).');
+      }
+      const c = find('compras', compraId);
+      if (c && c.pago) c.pago.aviso = data.aviso;
+      return data;
     },
     // Liga temporal (1 hora) para ver o descargar un archivo privado
     async urlArchivo(ruta) {

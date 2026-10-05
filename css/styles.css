@@ -1117,6 +1117,10 @@ a.fchip:hover { background: var(--lav); }
 .msg-h small { color: var(--muted); font-size: 12px; }
 .auto { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: var(--lav); color: var(--navy-deep); font-size: 13px; font-weight: 600; }
 .auto .ico { width: 18px; height: 18px; flex: none; color: var(--navy); }
+.auto--ok { background: var(--ok-bg); color: #0E5A3C; }
+.auto--ok .ico { color: var(--ok); }
+.auto--warn { background: var(--sun-bg); color: var(--sun-deep); }
+.auto--warn .ico { color: var(--sun-deep); }
 
 /* Lista de compras */
 .ccard { grid-template-columns: minmax(220px, 1fr) minmax(0, 1.4fr) minmax(170px, auto); }

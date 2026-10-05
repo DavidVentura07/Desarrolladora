@@ -780,8 +780,10 @@
                   <div class="msg-h"><span class="p-av">${icoSz('wa', 18)}</span><div><b>${esc(res.nombre || 'Residente')}</b><small>${c.pago ? 'Avísale que ya está pagado' : 'Se avisa al registrar el pago'}</small></div></div>
                   <div class="msg">${esc(msg)}<time>${c.pago ? esc(fDate(c.pago.fecha)) : 'pendiente'}</time></div>
                 </div>
-                <div class="auto">${I.bell}<span>Más adelante este aviso saldrá solo por correo y WhatsApp al subir el comprobante de pago. Por ahora envíalo tú.</span></div>
-                <div class="acts">${tel ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/52${esc(tel)}?text=${encodeURIComponent(msg)}">${I.wa}<span>Enviar por WhatsApp</span></a>` : `<span class="muted small">Agrega el celular del residente en <a class="link-u" href="#/usuarios">Usuarios</a> para enviarlo por WhatsApp.</span>`}</div>
+                ${!c.pago ? `<div class="auto">${I.bell}<span>Al subir el comprobante de pago se le manda un correo automático.</span></div>`
+                  : c.pago.aviso ? `<div class="auto auto--ok">${I.mail}<span>Correo enviado a ${c.pago.aviso.para.map(p => `<b>${esc(p.nombre || p.correo)}</b>`).join(' y ')} · ${esc(fDateT(c.pago.aviso.en))}</span></div>`
+                  : `<div class="auto auto--warn">${I.mail}<span>Todavía no se manda el correo de este pago.</span></div>`}
+                <div class="acts">${c.pago && esJefe() ? `<button type="button" class="btn" data-aviso>${I.mail}<span>${c.pago.aviso ? 'Reenviar correo' : 'Enviar correo'}</span></button>` : ''}${tel ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/52${esc(tel)}?text=${encodeURIComponent(msg)}">${I.wa}<span>Enviar por WhatsApp</span></a>` : `<span class="muted small">Agrega el celular del residente en <a class="link-u" href="#/usuarios">Usuarios</a> para enviarlo por WhatsApp.</span>`}</div>
               </div>
             </section>`}
           </aside>
@@ -801,6 +803,12 @@
           if (!(await api.confirmar({ titulo: 'Quitar documento', texto: `Se borrará ${t} de esta compra, con sus archivos. Úsalo solo para corregir un error.`, ok: 'Quitar', peligro: true }))) return;
           if (await hacer(() => R.quitarDocumento(b.dataset.quitar), 'Documento quitado.')) api.rerender();
         }));
+        const av = $('[data-aviso]', sec);
+        if (av) av.addEventListener('click', async () => {
+          av.disabled = true;
+          await avisarPago(c.id);
+          api.rerender();
+        });
         const fe = $('[data-fent]', sec);
         if (fe) fe.addEventListener('change', async () => {
           if (await hacer(() => R.actualizarCompra(c.id, { fechaEntrega: fe.value }), 'Fecha de entrega actualizada.')) api.rerender();
@@ -875,8 +883,23 @@
     const ok = await hacer(() => R.agregarDocumento(cid, tipo, { archivos: [file], fecha: today(), monto, referencia, datos }));
     if (!ok) return;
     api.rerender();
-    if (k === 'pago') toast(`Pagado: ya es seguro. Avisa a ${((obra(c.obraId) || {}).residente || {}).nombre || 'el residente'} desde "Aviso al residente".`);
-    else toast(k === 'rem' ? 'Remisión guardada: el material quedó como recibido en obra.' : 'Cotización guardada.');
+    if (k === 'pago') {
+      toast('Pagado: ya es seguro. Enviando el correo al residente…');
+      if (await avisarPago(cid)) api.rerender();
+    } else toast(k === 'rem' ? 'Remisión guardada: el material quedó como recibido en obra.' : 'Cotización guardada.');
+  }
+
+  // Correo automático al residente con el pago (si falla, el pago queda y se puede reintentar)
+  async function avisarPago(cid) {
+    try {
+      const r = await R.avisarPago(cid);
+      toast(`Correo enviado a ${r.aviso.para.map(p => p.nombre || p.correo).join(' y ')}.`);
+      await cargar();
+      return true;
+    } catch (e) {
+      toast(`El pago quedó registrado, pero no salió el correo: ${e.message}`);
+      return false;
+    }
   }
 
   /* ---------- Lectura del XML (CFDI) en el navegador ---------- */

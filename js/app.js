@@ -205,7 +205,7 @@
     $$('[data-count]').forEach(el => { el.textContent = DATA.length; });
     const r = respaldoEstado();
     $$('[data-backup]').forEach(el => {
-      el.className = 'backup backup--' + r.cls;
+      el.className = 'backup solo-jefes backup--' + r.cls;
       el.innerHTML = `<i></i><span><b>${esc(r.label)}</b><small class="mono">${esc(r.text)}</small></span>`;
     });
     $$('[data-backup-text]').forEach(el => { el.textContent = `${r.label} · ${r.text}`; });
@@ -674,6 +674,9 @@
   let pendienteImport = null;
 
   async function pageDatos() {
+    if (!(N.perfil && ['direccion', 'admin'].includes(N.perfil.rol))) {
+      return { title: 'Respaldo y datos', html: `<section class="page"><div class="empty rv"><div class="empty-mark">${markSVG()}</div><h2 class="h2">Sin acceso</h2><p class="muted">Solo Dirección y el admin técnico hacen respaldos e importan datos.</p><a class="btn" href="#/"><span>Volver</span>${ARR}</a></div></section>` };
+    }
     await refresh();
     for (const m of MODS) if (m.cargar) await m.cargar();
     const m = S.meta();
