@@ -1528,7 +1528,11 @@ body.welcome-open { overflow: hidden; }
   .we-cap { left: 22px; right: 22px; bottom: 22px; }
   .we--page { height: auto; min-height: 0; max-height: none; }
   .page--inicio { padding-bottom: 110px; }
-  .we--full { overflow-y: auto; padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
+  /* Las filas toman el alto de su contenido (sin esto la tarjeta se encogía al alto de la pantalla y el botón quedaba oculto) */
+  .we { grid-auto-rows: max-content; }
+  .we-card { overflow: visible; }
+  .we--full { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: calc(12px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom)); }
+  .we--full .we-stage { height: 34vh; height: 34svh; min-height: 240px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .we-slide > i, .we-slide img { transition: none; }
