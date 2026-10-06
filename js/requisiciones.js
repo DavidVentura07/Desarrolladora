@@ -9,7 +9,8 @@
    - El coordinador aprueba o rechaza material por material, puede
      devolverla para corregir y termina la revisión.
    - Solo entonces compras la ve y registra cotización, factura y XML;
-     Dirección sube el comprobante de pago; en obra se sube la remisión.
+     compras o Dirección suben el comprobante de pago; en obra se sube
+     la remisión. Desde la v0.7 los documentos se suben en cualquier orden.
    Flujo de cada material:
    Requisitado → Autorizado → Cotizado → Facturado → Pagado → Recibido en obra
    ========================================================= */
@@ -138,7 +139,29 @@
   const obra = id => D.obras.find(o => o.id === id);
   const req = id => D.requisiciones.find(r => r.id === id);
   const compra = id => (id ? D.compras.find(c => c.id === id) : null);
+  // Los documentos se suben en cualquier orden (v0.7); el estado es el paso más alto que ya tiene
   const compraEstado = c => (c.remision ? 'recibido' : c.pago ? 'pagado' : c.factura ? 'facturado' : 'cotizado');
+  // Filtros del listado de compras (pueden coincidir: una compra recibida puede seguir por pagar)
+  const FILTRO_EST = {
+    cotizado: c => !c.factura, facturado: c => c.factura && !c.pago, pagado: c => !!c.pago, recibido: c => !!c.remision,
+    dif: c => diferencias(c).length > 0
+  };
+  // Diferencias de montos o datos en una compra; se marcan en rojo (cuentan los centavos)
+  const cent = v => Math.round((+v || 0) * 100);
+  function diferencias(c) {
+    const f = c.factura, out = [], emp = D.config.empresa || {};
+    if (f && emp.rfc && f.receptorRfc && f.receptorRfc !== emp.rfc) out.push({ doc: 'factura', txt: `La factura está a nombre de ${f.receptorRfc}, no de ${emp.nombre || 'la empresa'} (${emp.rfc}).` });
+    if (f && c.cotizacion && c.cotizacion.monto && cent(f.total) !== cent(c.cotizacion.monto)) {
+      const d = (cent(f.total) - cent(c.cotizacion.monto)) / 100;
+      out.push({ doc: 'factura', txt: `La factura (${money(f.total)}) no coincide con la cotización (${money(c.cotizacion.monto)}): ${money(Math.abs(d))} ${d > 0 ? 'más' : 'menos'}.` });
+    }
+    const ref = f ? f.total : c.cotizacion ? c.cotizacion.monto : 0;
+    if (c.pago && ref && cent(c.pago.monto) !== cent(ref)) {
+      const d = (cent(c.pago.monto) - cent(ref)) / 100;
+      out.push({ doc: 'pago', txt: `El pago (${money(c.pago.monto)}) no coincide con ${f ? 'la factura' : 'la cotización'} (${money(ref)}): ${money(Math.abs(d))} ${d > 0 ? 'más' : 'menos'}.` });
+    }
+    return out;
+  }
   function estado(r, p) {
     if (r.estado === 'borrador') return 'borrador';
     if (p.aprobacion === 'rechazada') return 'rechazado';
@@ -146,7 +169,8 @@
     const c = compra(p.compraId);
     return c ? compraEstado(c) : 'autorizado';
   }
-  const suministro = (r, p) => p.fechaSuministro || r.fechaSuministro;
+  // Una sola fecha de suministro por requisición (v0.7); la fecha propia por material ya no se usa
+  const suministro = r => r.fechaSuministro;
   const entrega = p => { const c = compra(p.compraId); return c ? (c.entregas && c.entregas[p.id]) || c.fechaEntrega : ''; };
   const stats = r => { const s = {}; TODOS.forEach(e => { s[e.id] = 0; }); r.partidas.forEach(p => { s[estado(r, p)]++; }); return s; };
   const comprasDe = r => D.compras.filter(c => c.requisicionId === r.id);
@@ -172,6 +196,7 @@
   const yoId = () => (N.perfil || {}).id;
   const yo = () => { const p = N.perfil || {}; return p.nombre || p.correo || ''; };
   const esJefe = () => ['direccion', 'admin'].includes(rol());
+  const esAdmin = () => rol() === 'admin';   // solo el admin técnico corrige requisiciones ya enviadas (v0.7)
   const esCoord = () => esJefe() || rol() === 'coordinador';
   const esCompras = () => esJefe() || rol() === 'compras';
   const soloResidente = () => rol() === 'residente';
@@ -238,7 +263,7 @@
       const sup = o.suplentes.find(s => s.desde <= today() && today() <= s.hasta);
       return `<section class="ogroup">
         <div class="ogroup-h rv" style="--d:${120 + gi * 60}">
-          <span class="p-av">${esc(iniciales(res.nombre))}</span>
+          <span class="p-av">${esc(api.iniciales(res.nombre))}</span>
           <div><h2>${esc(o.nombre)}</h2><p class="sub">Residente: ${esc(res.nombre || 'sin asignar')}${sup ? ` · suplente: ${esc(sup.nombre)} hasta el ${esc(fDate(sup.hasta))}` : ''}</p></div>
         </div>
         <div class="rgrid">${rs.length ? rs.map((r, i) => rcard(r, 160 + gi * 60 + i * 50)).join('') : `
@@ -392,6 +417,7 @@
               <button class="btn" type="button" data-pdf>${I.print}<span>PDF</span></button>
               <button class="btn" type="button" data-xls>${I.vTabla}<span>Excel</span></button>
               ${editable ? `<button class="btn" type="button" data-edit>${I.edit}<span>Editar</span></button>` : ''}
+              ${!editable && esAdmin() && ['enviada', 'revisada'].includes(r.estado) ? `<button class="btn" type="button" data-corregir title="Corrección del admin técnico: queda en la bitácora">${I.edit}<span>Corregir</span></button>` : ''}
               ${editable && r.estado === 'borrador' ? `<button class="ibtn ibtn--line" type="button" data-borrar title="Borrar borrador" aria-label="Borrar borrador">${I.trash}</button>` : ''}
               ${editable ? `<button class="btn btn--solid" type="button" data-enviar>${I.send}<span>${r.estado === 'devuelta' ? 'Reenviar' : 'Enviar'}</span></button>` : ''}
               ${revisando ? `<button class="btn" type="button" data-devolver>${I.undo}<span>Devolver para corregir</span></button>
@@ -402,6 +428,7 @@
             <span><span class="muted">Enviada</span> <b>${r.enviadaEn ? esc(fDateT(r.enviadaEn)) : 'aún no'}</b></span>
             <span><span class="muted">Revisada</span> <b>${r.revisadaEn ? esc(fDateT(r.revisadaEn)) + ' · ' + esc(r.revisadaPor || '') : 'pendiente'}</b></span>
             <span><span class="muted">Suministro solicitado</span> <b>${esc(fDateL(r.fechaSuministro))}</b></span>
+            ${r.avisos.length ? `<span class="r-aviso">${I.mail}<span class="muted">${esc(AVISO_EV[r.avisos[0].evento] || 'Aviso')}</span> <b>${esc(r.avisos[0].para.map(x => x.nombre || x.correo).join(', '))} · ${esc(fDateT(r.avisos[0].en))}</b></span>` : ''}
             ${r.nota ? `<span class="muted">${esc(r.nota)}</span>` : ''}
           </div>
         </header>
@@ -415,10 +442,9 @@
           <div class="panel-b panel-b--flush">
             <div class="tablewrap">
             <table class="tbl rtbl">
-              <thead><tr>${sel ? '<th class="c-ck"></th>' : ''}<th class="c-n">#</th><th>Insumo</th><th class="num">Cantidad</th><th>Unidad</th><th>Suministro</th><th>¿Dónde se empleará?</th><th>Proveedor</th><th>Entrega</th><th>${revisando ? 'Revisión' : 'Estado'}</th></tr></thead>
+              <thead><tr>${sel ? '<th class="c-ck"></th>' : ''}<th class="c-n">#</th><th>Insumo</th><th class="num">Cantidad</th><th>Unidad</th><th>¿Dónde se empleará?</th><th>Proveedor</th><th>Entrega</th><th>${revisando ? 'Revisión' : 'Estado'}</th></tr></thead>
               <tbody>${r.partidas.map((p, i) => {
                 const e = estado(r, p), c = compra(p.compraId), ent = entrega(p);
-                const ovS = p.fechaSuministro && p.fechaSuministro !== r.fechaSuministro;
                 const ovE = c && c.entregas && c.entregas[p.id];
                 const rev = revisando ? `<div class="rev" role="group" aria-label="Revisión de ${esc(p.insumo)}">
                     <button type="button" class="rev-b rev-ok" data-rev="aprobada" aria-pressed="${p.aprobacion === 'aprobada'}" title="Aprobar">${I.check}<span>Aprobar</span></button>
@@ -430,7 +456,6 @@
                   <td class="ins"><b>${esc(p.insumo)}</b>${p.observaciones ? `<small>${esc(p.observaciones)}</small>` : ''}${p.aprobacion === 'rechazada' && p.motivoRechazo ? `<small class="rej">Rechazado: ${esc(p.motivoRechazo)}</small>` : ''}</td>
                   <td class="c-q">${qty(p.cantidad)}</td>
                   <td>${esc(p.unidad)}</td>
-                  <td class="c-dt">${esc(fDate(suministro(r, p)))}${ovS ? '<em>propia</em>' : ''}</td>
                   <td class="small">${esc(p.destino) || '<span class="muted">—</span>'}</td>
                   <td class="c-prov">${c ? `<a href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>` : '<span class="muted">—</span>'}</td>
                   <td class="c-dt">${ent ? esc(fDate(ent)) + (ovE ? '<em>propia</em>' : '') : '<span class="muted">—</span>'}</td>
@@ -448,9 +473,10 @@
         $('[data-xls]', sec).addEventListener('click', () => excel(r));
         const on = (sel, fn) => { const b = $(sel, sec); if (b) b.addEventListener('click', fn); };
         on('[data-edit]', () => drReq(r));
+        on('[data-corregir]', () => drReq(r, null, { correccion: true }));
         on('[data-enviar]', async () => {
-          if (!(await api.confirmar({ titulo: r.estado === 'devuelta' ? 'Reenviar requisición' : 'Enviar requisición', texto: `Se enviará <b>${esc(r.folio)}</b> con ${n} materiales al coordinador de obra. Después ya no podrás modificarla; lo que falte irá en una extraordinaria.`, ok: 'Enviar' }))) return;
-          if (await hacer(() => R.cambiarEstado(r.id, 'enviada'), 'Requisición enviada al coordinador de obra.')) api.rerender();
+          if (!(await api.confirmar({ titulo: r.estado === 'devuelta' ? 'Reenviar requisición' : 'Enviar requisición', texto: `Se enviará <b>${esc(r.folio)}</b> con ${n} materiales al coordinador de obra, con aviso por correo. Después ya no podrás modificarla; lo que falte irá en una extraordinaria.`, ok: 'Enviar' }))) return;
+          if (await hacer(() => R.cambiarEstado(r.id, 'enviada'), 'Requisición enviada. Avisando al coordinador por correo…')) { api.rerender(); avisar(r.id, 'enviada'); }
         });
         on('[data-borrar]', async () => {
           if (!(await api.confirmar({ titulo: 'Borrar borrador', texto: `Se borrará <b>${esc(r.folio)}</b> con sus ${n} materiales.`, ok: 'Borrar', peligro: true }))) return;
@@ -459,12 +485,12 @@
         on('[data-devolver]', async () => {
           const c = await api.preguntar({ titulo: 'Devolver para corregir', texto: `El residente podrá corregir <b>${esc(r.folio)}</b> y volver a enviarla. Lo que ya aprobaste se conserva, salvo los materiales que cambie.`, etiqueta: '¿Qué debe corregir?', campo: 'area', ok: 'Devolver', requerido: true });
           if (c == null) return;
-          if (await hacer(() => R.cambiarEstado(r.id, 'devuelta', c), 'Requisición devuelta al residente.')) api.rerender();
+          if (await hacer(() => R.cambiarEstado(r.id, 'devuelta', c), 'Requisición devuelta. Avisando al residente por correo…')) { api.rerender(); avisar(r.id, 'devuelta'); }
         });
         on('[data-terminar]', async () => {
           const ap = r.partidas.filter(p => p.aprobacion === 'aprobada').length;
-          if (!(await api.confirmar({ titulo: 'Terminar revisión', texto: `Quedan <b>${ap}</b> materiales aprobados y <b>${n - ap}</b> rechazados. Compras podrá cotizar los aprobados.`, ok: 'Terminar revisión' }))) return;
-          if (await hacer(() => R.cambiarEstado(r.id, 'revisada'), 'Revisión terminada: compras ya puede cotizar.')) api.rerender();
+          if (!(await api.confirmar({ titulo: 'Terminar revisión', texto: `Quedan <b>${ap}</b> materiales aprobados y <b>${n - ap}</b> rechazados. Compras podrá cotizar los aprobados.${n - ap ? ' Al residente le llega un correo con los rechazados y sus motivos.' : ''}`, ok: 'Terminar revisión' }))) return;
+          if (await hacer(() => R.cambiarEstado(r.id, 'revisada'), 'Revisión terminada: compras ya puede cotizar.')) { api.rerender(); if (n - ap) avisar(r.id, 'revisada'); }
         });
         // Aprobar o rechazar material por material
         $$('[data-rev]', sec).forEach(b => b.addEventListener('click', async e => {
@@ -491,6 +517,20 @@
     };
   }
 
+  // Correo automático de la requisición; si falla, el cambio de estado ya quedó guardado
+  const AVISO_EV = { enviada: 'Correo al coordinador', devuelta: 'Correo de devolución', revisada: 'Correo de rechazos' };
+  async function avisar(id, evento) {
+    try {
+      const x = await R.avisarRequisicion(id, evento);
+      if (!x || x.omitido) return;
+      toast(`Correo enviado a ${x.aviso.para.map(p => p.nombre || p.correo).join(' y ')}.`);
+      await cargar();
+      if (location.hash === '#/r/' + id) api.rerender();
+    } catch (e) {
+      toast(`Quedó guardado, pero no salió el correo: ${e.message}`);
+    }
+  }
+
   /* =========================================================
      COMPRAS Y FACTURAS
      ========================================================= */
@@ -503,7 +543,7 @@
     const q = norm(UI.q);
     const lista = vis.filter(c => (!obraF || c.obraId === obraF)
       && (!UI.cWk || String(wkKey(c)) === UI.cWk)
-      && (UI.cEst === 'todas' || compraEstado(c) === UI.cEst)
+      && (!FILTRO_EST[UI.cEst] || FILTRO_EST[UI.cEst](c))
       && (!q || norm([c.proveedor.nombre, c.proveedor.rfc, c.factura && (c.factura.serie + ' ' + c.factura.folio), c.factura && c.factura.uuid,
         ...c.partidas.map(pid => (findPartida(pid) || {}).insumo)].filter(Boolean).join(' ')).includes(q)))
       .sort((a, b) => wkKey(b) - wkKey(a) || montoCompra(b) - montoCompra(a));
@@ -511,6 +551,7 @@
     const totalPag = pagadas.reduce((a, c) => a + c.pago.monto, 0);
     const pagWkL = pagadas.filter(c => wkKey(c) === wkKey(hw));
     const porPagarM = vis.filter(c => c.factura && !c.pago).reduce((a, c) => a + c.factura.total, 0);
+    const conDif = vis.filter(c => diferencias(c).length).length;
     const semanas = [...new Set(vis.map(c => wkKey(c)))].sort((a, b) => b - a);
     const varias = obrasMias().length > 1;
 
@@ -554,7 +595,8 @@
           <label class="search">${I.search}<input type="search" data-q placeholder="Proveedor, folio, UUID o material" value="${esc(UI.q)}" aria-label="Buscar compras"></label>
         </div>
         <div class="filterbar rv" style="--d:180">
-          <div class="seg" role="group" aria-label="Estado">${[['todas', 'Todas'], ['cotizado', 'Cotizadas'], ['facturado', 'Por pagar'], ['pagado', 'Pagadas'], ['recibido', 'Recibidas']].map(([k, l]) => `<button type="button" data-est="${k}" aria-pressed="${UI.cEst === k}">${l}</button>`).join('')}</div>
+          <div class="seg" role="group" aria-label="Estado">${[['todas', 'Todas'], ['cotizado', 'Sin factura'], ['facturado', 'Por pagar'], ['pagado', 'Pagadas'], ['recibido', 'Recibidas']].map(([k, l]) => `<button type="button" data-est="${k}" aria-pressed="${UI.cEst === k}">${l}</button>`).join('')}</div>
+          ${conDif || UI.cEst === 'dif' ? `<button type="button" class="dif-f" data-est="dif" aria-pressed="${UI.cEst === 'dif'}">${I.alert}<span>Con diferencias <b>${conDif}</b></span></button>` : ''}
           <span class="fb-sep"></span>
           ${varias ? `<label class="psel${UI.cObra ? ' on' : ''}"><span class="sr">Obra</span><select data-rf="cObra"><option value="">Obra</option>${obrasMias().map(o => `<option value="${esc(o.id)}"${UI.cObra === o.id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>` : ''}
           <label class="psel${UI.cWk ? ' on' : ''}"><span class="sr">Semana</span><select data-rf="cWk"><option value="">Semana</option>${semanas.map(k => `<option value="${k}"${UI.cWk === String(k) ? ' selected' : ''}>Semana ${k % 100}</option>`).join('')}</select></label>
@@ -563,7 +605,7 @@
         ${grupos || `<div class="empty empty--sm"><p class="h3">${vis.length ? 'Sin compras con estos filtros' : 'Todavía no hay compras'}</p><p class="muted small">Las compras nacen en una requisición revisada: selecciona los materiales aprobados y registra la cotización elegida.</p></div>`}
       </section>`,
       bind(sec) {
-        $$('[data-est]', sec).forEach(b => b.addEventListener('click', () => { UI.cEst = b.dataset.est; saveUI(); api.rerender(); }));
+        $$('[data-est]', sec).forEach(b => b.addEventListener('click', () => { UI.cEst = b.dataset.est === 'dif' && UI.cEst === 'dif' ? 'todas' : b.dataset.est; saveUI(); api.rerender(); }));
         $$('[data-est-go]', sec).forEach(b => b.addEventListener('click', () => { UI.cEst = b.dataset.estGo; saveUI(); api.rerender(); }));
         $$('select[data-rf]', sec).forEach(s => s.addEventListener('change', () => { UI[s.dataset.rf] = s.value; saveUI(); api.rerender(); }));
         const qi = $('[data-q]', sec); let t;
@@ -587,7 +629,9 @@
   function ccard(c, d) {
     const o = obra(c.obraId) || {}, r = req(c.requisicionId);
     const mats = c.partidas.map(findPartida).filter(Boolean);
-    return `<article class="card lcard ccard rv" style="--d:${d}" data-href="#/c/${esc(c.id)}" tabindex="0">
+    const difs = diferencias(c), difEn = new Set(difs.map(x => x.doc));
+    const chipDe = { Factura: 'factura', XML: 'factura', Pago: 'pago' };
+    return `<article class="card lcard ccard rv${difs.length ? ' ccard--dif' : ''}" style="--d:${d}" data-href="#/c/${esc(c.id)}" tabindex="0">
       <div class="l-id">
         <span class="av ${tono(c.proveedor.nombre)}">${esc(iniciales(c.proveedor.nombre))}</span>
         <div class="c-id"><a class="pname" href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>
@@ -595,10 +639,11 @@
       </div>
       <div class="l-mid">
         <p class="w-serv c-mats">${mats.slice(0, 3).map(p => `${esc(p.insumo)} <span class="muted">(${qty(p.cantidad)} ${esc(p.unidad)})</span>`).join(' · ')}${mats.length > 3 ? ` <span class="muted">y ${mats.length - 3} más</span>` : ''}</p>
-        <div class="dchips">${docsDe(c).map(([l, ok]) => `<span class="dchip${ok ? ' ok' : ''}">${ok ? I.check : I.clock}${l}</span>`).join('')}</div>
+        <div class="dchips">${docsDe(c).map(([l, ok]) => ok && difEn.has(chipDe[l]) ? `<span class="dchip bad">${I.alert}${l}</span>` : `<span class="dchip${ok ? ' ok' : ''}">${ok ? I.check : I.clock}${l}</span>`).join('')}</div>
+        ${difs.length ? `<p class="dif-l">${I.alert}<span>${esc(difs[0].txt)}${difs.length > 1 ? ` <b>(+${difs.length - 1} más)</b>` : ''}</span></p>` : ''}
         <span class="muted small">${r ? 'Requisición ' + esc(r.folio) + ' · ' : ''}${c.partidas.length} materiales · entrega ${esc(fDate(c.fechaEntrega))}</span>
       </div>
-      <div class="c-total"><b>${money(montoCompra(c))}</b>${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
+      <div class="c-total"><b>${money(montoCompra(c))}</b>${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
     </article>`;
   }
 
@@ -682,13 +727,15 @@
     const fch = (icon, a, tipo) => a && a.ruta
       ? `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}" title="Abrir ${esc(a.nombre)}">${I[icon]}<span>${esc(a.nombre)}</span><em>${tipo}</em></button>`
       : '';
+    // Se pueden subir en cualquier orden; se resalta el primero que falta
     const next = !c.cotizacion ? 1 : !f ? 2 : !c.pago ? 3 : !c.remision ? 4 : 0;
+    const difs = diferencias(c), difEn = new Set(difs.map(x => x.doc));
     const res = o.residente || {};
     const recibida = !!c.remision;
-    const puedeQuitar = t => (esJefe() || (esCompras() && t !== 'pago'));
+    const puedeQuitar = () => esCompras();   // v0.7: compras también quita o reemplaza el comprobante de pago
 
-    const doc = (n, titulo, sub, d, cuerpo, accion, tipo) => `<div class="doc rv${d ? ' ok' : next === n ? ' next' : ''}" style="--d:${60 + n * 40}">
-      <div class="doc-h"><span class="doc-n">${d ? icoSz('check', 16) : n}</span><div><h3>${titulo}</h3><small>${sub}</small></div>
+    const doc = (n, titulo, sub, d, cuerpo, accion, tipo) => `<div class="doc rv${d && difEn.has(tipo) ? ' dif' : d ? ' ok' : next === n ? ' next' : ''}" style="--d:${60 + n * 40}">
+      <div class="doc-h"><span class="doc-n">${d && difEn.has(tipo) ? icoSz('alert', 17) : d ? icoSz('check', 16) : n}</span><div><h3>${titulo}</h3><small>${d && difEn.has(tipo) ? '<b class="doc-dif">Diferencia en el monto o los datos</b>' : sub}</small></div>
         ${d && puedeQuitar(tipo) ? `<button type="button" class="ibtn doc-x" data-quitar="${esc(d.docId)}" data-tipo="${tipo}" title="Quitar este documento" aria-label="Quitar ${titulo}">${I.trash}</button>` : ''}</div>
       ${cuerpo}<div class="doc-act">${accion || ''}</div></div>`;
     const drop = (k, txt, icon = 'upload') => `<button class="drop-mini" type="button" data-up="${k}">${I[icon]}<span>${txt}</span></button>`;
@@ -707,7 +754,7 @@
           <div class="d-top">
             <span class="av av--xl ${tono(c.proveedor.nombre)}">${esc(iniciales(c.proveedor.nombre))}</span>
             <div class="d-title">
-              <div class="d-tags">${st(e)}${f && f.uuid ? ' <span class="tagx tagx--ok">' + I.xml + 'XML leído</span>' : ''}</div>
+              <div class="d-tags">${st(e)}${difs.length ? ` <span class="tagx tagx--bad">${I.alert}Con diferencias</span>` : ''}${f && f.uuid ? ' <span class="tagx tagx--ok">' + I.xml + 'XML leído</span>' : ''}</div>
               <h1 class="title title--d">${esc(c.proveedor.nombre)}</h1>
               <p class="d-sub">${c.proveedor.rfc ? `<span class="mono">${esc(c.proveedor.rfc)}</span>` : ''}<span>${esc(o.nombre || '')}</span><span>Semana ${c.semana}</span>
                 ${r ? `<a class="link-u" href="#/r/${esc(r.id)}">Requisición ${esc(r.folio)}</a>` : ''}
@@ -717,6 +764,7 @@
           </div>
         </header>
 
+        ${difs.length ? `<div class="note note--bad rv" style="--d:50" role="alert">${I.alert}<p><b>${difs.length === 1 ? 'Hay una diferencia' : 'Hay ' + difs.length + ' diferencias'} en esta compra.</b> Revísala con el proveedor antes de pagar o archivar.<br>${difs.map(x => esc(x.txt)).join('<br>')}</p></div>` : ''}
         <div class="docs">
           ${doc(1, 'Cotización elegida', 'La que se va a pagar', c.cotizacion,
             c.cotizacion ? `<div class="files">${archivosDe(c.cotizacion, 'file', 'PDF')}</div><p class="dmeta"><b>${money(c.cotizacion.monto)}</b> · ${esc(fDate(c.cotizacion.fecha))} · ${esc(c.cotizacion.subidoPor)}</p>` : '',
@@ -724,13 +772,13 @@
           ${doc(2, 'Factura y XML', 'Los datos se leen del XML', f,
             f ? `<div class="files">${fch('file', f.pdfArchivo, 'PDF') || sinArch('Falta el PDF')}${fch('xml', f.xmlArchivo, 'XML')}</div>
               <p class="dmeta">Folio <b>${esc((f.serie || '') + ' ' + f.folio)}</b> · ${esc(fDate(f.fecha))}${f.uuid ? `<br>UUID <span class="mono">${esc(f.uuid.slice(0, 8))}…</span>` : ''}</p>` : '',
-            !f ? (!c.cotizacion ? lock('Primero la cotización.') : esCompras() ? drop('xml', 'Subir XML y PDF', 'xml') : lock('Compras sube la factura.')) : '', 'factura')}
+            !f ? (esCompras() ? drop('xml', 'Subir XML y PDF', 'xml') : lock('Compras sube la factura.')) : '', 'factura')}
           ${doc(3, 'Comprobante de pago', 'Al subirlo, el material ya es seguro', c.pago,
             c.pago ? `<div class="files">${archivosDe(c.pago, 'cash', 'PDF')}</div><p class="dmeta"><b>${money(c.pago.monto)}</b> · ${esc(fDate(c.pago.fecha))}${c.pago.referencia ? ' · ' + esc(c.pago.referencia) : ''}</p>` : '',
-            !c.pago ? (!f ? lock('Primero la factura.') : esJefe() ? drop('pago', 'Subir comprobante', 'cash') : lock('Dirección sube el comprobante de pago.')) : '', 'pago')}
+            !c.pago ? (esCompras() ? drop('pago', 'Subir comprobante', 'cash') : lock('Compras o Dirección suben el comprobante de pago.')) : '', 'pago')}
           ${doc(4, 'Remisión firmada', 'Foto desde la obra al recibir', c.remision,
             c.remision ? `<div class="files">${archivosDe(c.remision, 'camera', 'FOTO')}</div><p class="dmeta">Recibió <b>${esc(c.remision.recibio)}</b> · ${esc(fDate(c.remision.fecha))}</p>` : '',
-            !c.remision ? (!c.pago ? lock('Se activa cuando se paga.') : puedeRemision(c.obraId) ? drop('rem', soloResidente() ? 'Tomar foto de la remisión' : 'Subir foto de la remisión', 'camera') : lock('El residente sube la remisión.')) : '', 'remision')}
+            !c.remision ? (puedeRemision(c.obraId) ? drop('rem', soloResidente() ? 'Tomar foto de la remisión' : 'Subir foto de la remisión', 'camera') : lock('El residente sube la remisión.')) : '', 'remision')}
         </div>
 
         <div class="d-grid">
@@ -783,7 +831,7 @@
                 ${!c.pago ? `<div class="auto">${I.bell}<span>Al subir el comprobante de pago se le manda un correo automático.</span></div>`
                   : c.pago.aviso ? `<div class="auto auto--ok">${I.mail}<span>Correo enviado a ${c.pago.aviso.para.map(p => `<b>${esc(p.nombre || p.correo)}</b>`).join(' y ')} · ${esc(fDateT(c.pago.aviso.en))}</span></div>`
                   : `<div class="auto auto--warn">${I.mail}<span>Todavía no se manda el correo de este pago.</span></div>`}
-                <div class="acts">${c.pago && esJefe() ? `<button type="button" class="btn" data-aviso>${I.mail}<span>${c.pago.aviso ? 'Reenviar correo' : 'Enviar correo'}</span></button>` : ''}${tel ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/52${esc(tel)}?text=${encodeURIComponent(msg)}">${I.wa}<span>Enviar por WhatsApp</span></a>` : `<span class="muted small">Agrega el celular del residente en <a class="link-u" href="#/usuarios">Usuarios</a> para enviarlo por WhatsApp.</span>`}</div>
+                <div class="acts">${c.pago && esCompras() ? `<button type="button" class="btn" data-aviso>${I.mail}<span>${c.pago.aviso ? 'Reenviar correo' : 'Enviar correo'}</span></button>` : ''}${tel ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/52${esc(tel)}?text=${encodeURIComponent(msg)}">${I.wa}<span>Enviar por WhatsApp</span></a>` : `<span class="muted small">Agrega el celular del residente en <a class="link-u" href="#/usuarios">Usuarios</a> para enviarlo por WhatsApp.</span>`}</div>
               </div>
             </section>`}
           </aside>
@@ -840,7 +888,7 @@
     if (f.uuid) out.push(['ok', 'UUID único: el servidor no permite registrar la misma factura dos veces.']);
     if (c.cotizacion && c.cotizacion.monto) {
       const d = Math.round((f.total - c.cotizacion.monto) * 100) / 100;
-      out.push(Math.abs(d) < 1 ? ['ok', 'El total coincide con la cotización.'] : ['meh', `El total difiere ${money(Math.abs(d))} de la cotización (${d > 0 ? 'más caro' : 'más barato'}).`]);
+      out.push(d === 0 ? ['ok', 'El total coincide al centavo con la cotización.'] : ['no', `El total difiere ${money(Math.abs(d))} de la cotización (${d > 0 ? 'más caro' : 'más barato'}).`]);
     }
     if (f.metodoPago) out.push(f.metodoPago === 'PUE' ? ['ok', 'Pago en una sola exhibición: basta el comprobante de transferencia.'] : ['meh', 'Factura PPD: además del pago, el proveedor debe emitir complemento de pago.']);
     return out;
@@ -873,7 +921,7 @@
       monto = parseFloat(m) || 0;
     }
     if (k === 'pago') {
-      const m = await api.preguntar({ titulo: 'Monto pagado', texto: esc(file.name), etiqueta: 'Monto del comprobante', campo: 'numero', valor: c.factura ? String(c.factura.total) : '', ok: 'Subir', requerido: true });
+      const m = await api.preguntar({ titulo: 'Monto pagado', texto: esc(file.name), etiqueta: 'Monto del comprobante', campo: 'numero', valor: c.factura ? String(c.factura.total) : c.cotizacion ? String(c.cotizacion.monto) : '', ok: 'Subir', requerido: true });
       if (m == null) return;
       monto = parseFloat(m) || 0; referencia = 'Transferencia';
     }
@@ -1069,9 +1117,12 @@
       ['Autorizado', p.aprobacion === 'aprobada' ? `${p.revisadaPor} · ${fDateT(p.revisadaEn)}` : '', 'Espera la revisión del coordinador de obra'],
       ['Cotizado', c && c.cotizacion ? `${c.proveedor.nombre} · ${money(c.cotizacion.monto)} · ${fDate(c.cotizacion.fecha)}` : '', 'Compras registra la cotización elegida'],
       ['Facturado', f ? `Factura ${f.serie || ''} ${f.folio} · ${fDate(f.fecha)}` : '', 'Compras sube la factura y su XML'],
-      ['Pagado: ya es seguro', c && c.pago ? `${money(c.pago.monto)} · ${fDateL(c.pago.fecha)}` : '', 'Dirección sube el comprobante de pago'],
+      ['Pagado: ya es seguro', c && c.pago ? `${money(c.pago.monto)} · ${fDateL(c.pago.fecha)}` : '', 'Compras o Dirección suben el comprobante de pago'],
       ['Recibido en obra', c && c.remision ? `Recibió ${c.remision.recibio} · ${fDate(c.remision.fecha)}` : '', entrega(p) ? `Entrega programada: ${fDateL(entrega(p))}` : 'Se sube la foto de la remisión firmada']
     ];
+    // Los documentos de la compra se suben en cualquier orden: cada paso cuenta por sí solo
+    const hechos = pasos.map(([, hecho], i) => (i < 2 ? i <= k : !!hecho));
+    const sig = hechos.indexOf(false);
     api.openPanel(`<div class="dr-form">
       ${drHead(`${esc(r.folio)} · material ${r.partidas.indexOf(p) + 1}`, esc(p.insumo))}
       <div class="dr-b">
@@ -1081,12 +1132,12 @@
           <dl class="dl">
             ${p.observaciones ? `<div><dt>Observaciones</dt><dd>${esc(p.observaciones)}</dd></div>` : ''}
             <div><dt>¿Dónde se empleará?</dt><dd>${esc(p.destino || '—')}</dd></div>
-            <div><dt>Suministro solicitado</dt><dd>${esc(fDateL(suministro(r, p)))}${p.fechaSuministro ? ' <span class="muted">(fecha propia)</span>' : ''}</dd></div>
+            <div><dt>Suministro solicitado</dt><dd>${esc(fDateL(suministro(r)))}</dd></div>
             <div><dt>Proveedor</dt><dd>${c ? `<a class="link-u" href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>` : '—'}</dd></div>
           </dl>
         </div></section>
         ${e === 'borrador' || e === 'rechazado' ? '' : `<section class="fs"><div class="fs-b">
-          <ol class="tl">${pasos.map(([t, hecho, pend], i) => `<li class="${i <= k ? 'done' : i === k + 1 ? 'now' : ''}"><span class="dot">${I[EST[i].ico]}</span><div><h4>${t}</h4><p>${esc(i <= k ? hecho : pend)}</p></div></li>`).join('')}</ol>
+          <ol class="tl">${pasos.map(([t, hecho, pend], i) => `<li class="${hechos[i] ? 'done' : i === sig ? 'now' : ''}"><span class="dot">${I[EST[i].ico]}</span><div><h4>${t}</h4><p>${esc(hechos[i] ? hecho : pend)}</p></div></li>`).join('')}</ol>
         </div></section>`}
       </div>
       <footer class="dr-f">${c ? `<a class="btn btn--solid" href="#/c/${esc(c.id)}">${I.receipt}<span>Ver la compra</span></a>` : '<button class="btn" type="button" data-close><span>Cerrar</span></button>'}</footer>
@@ -1094,12 +1145,15 @@
   }
 
   /* ---------- Nueva requisición / editar (se guarda como borrador o se envía) ---------- */
-  async function drReq(r0, obraPre) {
+  // correccion: el admin técnico corrige una requisición ya enviada o revisada (v0.7);
+  // lo que agrega entra aprobado y todo queda en la bitácora
+  async function drReq(r0, obraPre, { correccion = false } = {}) {
     await cargar();
     const r = r0 ? req(r0.id) : null;
     const nueva = !r;
-    if (r && !(['borrador', 'devuelta'].includes(r.estado) && puedeEditarReq(r.obraId))) { toast('Esta requisición ya no se puede editar.'); return; }
-    const obras = D.obras.filter(o => puedeEditarReq(o.id) && o.estatus !== 'cerrada');
+    if (correccion && !(r && esAdmin())) { toast('Solo el admin técnico corrige requisiciones enviadas.'); return; }
+    if (r && !correccion && !(['borrador', 'devuelta'].includes(r.estado) && puedeEditarReq(r.obraId))) { toast('Esta requisición ya no se puede editar.'); return; }
+    const obras = correccion ? D.obras.filter(o => o.id === r.obraId) : D.obras.filter(o => puedeEditarReq(o.id) && o.estatus !== 'cerrada');
     if (!obras.length) {
       toast(soloResidente() ? 'No tienes una obra asignada. Pide que te asignen como residente.' : esCoord() ? 'Primero agrega una obra.' : 'Tu rol no crea requisiciones.');
       if (esJefe()) location.hash = '#/obras';
@@ -1110,7 +1164,7 @@
     const ordinariaExiste = (oid, ww) => D.requisiciones.some(x => x !== r && x.obraId === oid && x.anio === ww.anio && x.semana === ww.semana && x.tipo === 'ordinaria');
     const tipo0 = nueva ? (ordinariaExiste(oSel, w) ? 'extraordinaria' : 'ordinaria') : r.tipo;
     const fSum0 = nueva ? ymd(addDays(lunes(w.anio, w.semana), 4)) : r.fechaSuministro;
-    const vacia = () => ({ id: '', insumo: '', unidad: 'PZA', cantidad: '', observaciones: '', destino: '', fechaSuministro: '' });
+    const vacia = () => ({ id: '', insumo: '', unidad: 'PZA', cantidad: '', observaciones: '', destino: '', fechaSuministro: '', compraId: '' });
     const filas = nueva ? Array.from({ length: 5 }, vacia) : r.partidas.map(p => Object.assign({}, p));
     const fila = (p, i) => `<div class="prow${p.aprobacion === 'rechazada' ? ' is-off' : ''}" data-pid="${esc(p.id)}">
       <i>${i + 1}</i>
@@ -1119,33 +1173,35 @@
       <input class="in" name="cantidad" type="number" min="0" step="any" placeholder="0" value="${esc(p.cantidad)}" aria-label="Cantidad">
       <input class="in" name="obs" placeholder="Presentación, color…" value="${esc(p.observaciones)}" aria-label="Observaciones">
       <input class="in" name="destino" placeholder="¿Dónde se empleará?" value="${esc(p.destino)}" aria-label="¿Dónde se empleará?">
-      <input class="in" name="pfsum" type="date" value="${esc(p.fechaSuministro)}" aria-label="Fecha propia de suministro" title="Vacío = la fecha de la requisición">
-      <button class="ibtn" type="button" data-del aria-label="Quitar renglón">${I.trash}</button>
+      ${correccion && p.compraId
+        ? `<button class="ibtn" type="button" disabled title="Ya está en una compra: no se puede quitar" aria-label="Ya está en una compra">${I.receipt}</button>`
+        : `<button class="ibtn" type="button" data-del aria-label="Quitar renglón">${I.trash}</button>`}
     </div>`;
-    const reenviar = r && r.estado === 'devuelta';
+    const reenviar = r && r.estado === 'devuelta' && !correccion;
     api.openPanel(`<form class="dr-form" novalidate>
-      ${drHead(nueva ? 'Requisición de materiales' : esc(r.folio), nueva ? 'Nueva requisición' : 'Editar requisición')}
+      ${drHead(nueva ? 'Requisición de materiales' : esc(r.folio), nueva ? 'Nueva requisición' : correccion ? 'Corregir requisición' : 'Editar requisición')}
       <div class="dr-b">
+        ${correccion ? `<div class="note note--info"><span>${I.shield}</span><p><b>Corrección del admin técnico.</b> La requisición conserva su estado. Lo que agregues queda aprobado; lo que cambies conserva su aprobación. Los materiales que ya están en una compra no se pueden quitar. Todo queda en la bitácora.</p></div>` : ''}
         ${reenviar ? `<div class="note"><span>${I.alert}</span><p><b>Corrección pedida:</b> ${esc(r.comentarioRevision || '—')}. Los materiales que cambies vuelven a revisión; los demás conservan su aprobación.</p></div>` : ''}
         <fieldset class="fs"><legend><span class="mono">1</span>Obra y semana</legend><div class="fs-b"><div class="grid3">
           <label class="fld"><span class="fld-l">Obra</span><select class="in" name="obra"${nueva && obras.length > 1 ? '' : ' disabled'}>${obras.map(o => `<option value="${esc(o.id)}"${o.id === oSel ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>
           <label class="fld"><span class="fld-l">Semana</span><input class="in" name="semana" type="number" min="1" max="53" value="${w.semana}"${nueva ? '' : ' disabled'}><span class="fld-h" data-corte>Corte ${esc(wkRange(w))}</span></label>
-          <label class="fld"><span class="fld-l">Suministro en obra</span><input class="in" name="fsum" type="date" value="${esc(fSum0)}"><span class="fld-h">Para toda la requisición; cada material puede tener la suya.</span></label>
+          <label class="fld"><span class="fld-l">Suministro en obra</span><input class="in" name="fsum" type="date" value="${esc(fSum0)}"><span class="fld-h">Una sola fecha para toda la requisición.</span></label>
           <div class="fld fld--wide"><span class="fld-l">Tipo</span><div class="toggles">
             <label class="chk chk--pill"><input type="radio" name="tipo" value="ordinaria"${tipo0 === 'ordinaria' ? ' checked' : ''}><span>Ordinaria (lunes 4 pm)</span></label>
             <label class="chk chk--pill"><input type="radio" name="tipo" value="extraordinaria"${tipo0 === 'extraordinaria' ? ' checked' : ''}><span>Extraordinaria</span></label>
           </div><span class="fld-h" data-tipo-h></span></div>
         </div></div></fieldset>
         <fieldset class="fs"><legend><span class="mono">2</span>Materiales <span class="opt" data-cnt></span></legend><div class="fs-b">
-          <div class="prow-h"><span>#</span><span>Insumo</span><span>Unidad</span><span>Cantidad</span><span>Observaciones</span><span>¿Dónde se empleará?</span><span>Fecha propia</span><span></span></div>
+          <div class="prow-h"><span>#</span><span>Insumo</span><span>Unidad</span><span>Cantidad</span><span>Observaciones</span><span>¿Dónde se empleará?</span><span></span></div>
           <div class="prows">${filas.map(fila).join('')}</div>
           <button class="tbtn tbtn--sm" type="button" data-add>${I.plus}<span>Agregar renglón</span></button>
         </div></fieldset>
       </div>
       <footer class="dr-f"><p class="dr-err" role="alert" data-err></p>
         <button type="button" class="btn" data-close><span>Cancelar</span></button>
-        <button type="submit" class="btn" data-guardar>${I.draft}<span>Guardar borrador</span></button>
-        <button type="submit" class="btn btn--solid" data-ok data-enviar>${I.send}<span>${reenviar ? 'Guardar y reenviar' : 'Guardar y enviar'}</span></button>
+        ${correccion ? `<button type="submit" class="btn btn--solid" data-ok>${I.check}<span>Guardar corrección</span></button>` : `<button type="submit" class="btn" data-guardar>${I.draft}<span>Guardar borrador</span></button>
+        <button type="submit" class="btn btn--solid" data-ok data-enviar>${I.send}<span>${reenviar ? 'Guardar y reenviar' : 'Guardar y enviar'}</span></button>`}
       </footer>
     </form>`, { wide: true }, panel => {
       const form = $('form', panel), rows = $('.prows', panel);
@@ -1175,7 +1231,9 @@
         const ps = $$('.prow', rows).map(x => ({
           id: x.dataset.pid || '', insumo: x.querySelector('[name="insumo"]').value.trim().toUpperCase(), unidad: x.querySelector('[name="unidad"]').value,
           cantidad: parseFloat(x.querySelector('[name="cantidad"]').value), observaciones: x.querySelector('[name="obs"]').value.trim().toUpperCase(),
-          destino: x.querySelector('[name="destino"]').value.trim().toUpperCase(), fechaSuministro: x.querySelector('[name="pfsum"]').value
+          destino: x.querySelector('[name="destino"]').value.trim().toUpperCase(),
+          // la fecha propia de antes se conserva tal cual (ya no se edita) para no mandar a revisión lo que no cambió
+          fechaSuministro: ((r && r.partidas.find(y => y.id === x.dataset.pid)) || {}).fechaSuministro || ''
         })).filter(p => p.insumo || p.cantidad);
         const mal = ps.find(p => !p.insumo || !(p.cantidad > 0));
         if (!ps.length || mal) { err.textContent = !ps.length ? 'Agrega al menos un material.' : `Falta insumo o cantidad en "${mal.insumo || 'un renglón'}".`; return; }
@@ -1190,8 +1248,8 @@
           : Object.assign({}, r, { fechaSuministro: form.fsum.value, tipo: form.tipo.value });
         $$('button[type="submit"]', panel).forEach(b => { b.disabled = true; });
         try {
-          const id = await R.guardarRequisicion(datos, ps);
-          if (enviar) await R.cambiarEstado(id, 'enviada');
+          const id = await R.guardarRequisicion(datos, ps, { aprobar: correccion });
+          if (enviar && !correccion) { await R.cambiarEstado(id, 'enviada'); setTimeout(() => avisar(id, 'enviada'), 400); }
           datos.id = id;
         } catch (x) {
           $$('button[type="submit"]', panel).forEach(b => { b.disabled = false; });
@@ -1219,7 +1277,7 @@
       title: 'Obras',
       html: `<section class="page">
         <header class="page-head rv"><div><p class="eyebrow">Cada obra con su residente</p><h1 class="title">Obras</h1></div></header>
-        <div class="note note--info rv" style="--d:60">${I.building}<p>El residente de cada obra (y su suplente mientras dure la suplencia) es el único que crea y envía sus requisiciones. ${esJefe() ? 'Toca una obra para editarla, cambiar su residente o asignar un suplente.' : esCoord() ? 'Toca una obra para asignar un suplente temporal.' : ''}</p></div>
+        <div class="note note--info rv" style="--d:60">${I.building}<p>El residente de cada obra (y su suplente mientras dure la suplencia) es el único que crea y envía sus requisiciones. ${esJefe() ? 'Para cambiar al residente usa <b>Cambiar residente</b> en la tarjeta; queda el historial. Toca la obra para editarla o asignar un suplente.' : esCoord() ? 'Toca una obra para asignar un suplente temporal.' : ''}</p></div>
         ${os.length ? `<div class="cards cards--amplias">${os.map((o, i) => {
           const rs = D.requisiciones.filter(r => r.obraId === o.id), cs = D.compras.filter(c => c.obraId === o.id && c.pago);
           const provs = DIR.filter(p => p.obras.some(x => norm(x) === norm(o.nombre)));
@@ -1231,14 +1289,16 @@
               <span class="tag ${o.estatus === 'cerrada' ? 'tag--off' : 'tag--activo'}"><i></i>${o.estatus === 'cerrada' ? 'Cerrada' : 'Activa'}</span></div>
             <div class="stats4"><div><small>Requisiciones</small><b>${rs.length}</b></div><div><small>Semanas con requisición</small><b>${new Set(rs.map(wkKey)).size}</b></div><div><small>Pagado</small><b>${moneyK(cs.reduce((a, c) => a + c.pago.monto, 0))}</b></div></div>
             ${provs.length ? `<div class="o-provs"><small class="muted">Proveedores del directorio en esta obra</small><div class="l-tags">${provs.slice(0, 6).map(p => `<a class="chip-ro" href="#/p/${encodeURIComponent(p.id)}">${esc(api.nombreProveedor(p))}</a>`).join('')}${provs.length > 6 ? `<span class="more">+${provs.length - 6}</span>` : ''}</div></div>` : ''}
-            <div class="c-bot"><span class="p-av">${esc(iniciales(res.nombre))}</span><div class="c-who"><b>${esc(res.nombre || 'Sin residente')}${mia && o.residenteId === yoId() ? ' · tú' : ''}</b><small>Residente de obra${res.telefono ? ' · ' + esc(res.telefono) : ''}</small></div></div>
+            <div class="c-bot"><span class="p-av">${esc(api.iniciales(res.nombre))}</span><div class="c-who"><b>${esc(res.nombre || 'Sin residente')}${mia && o.residenteId === yoId() ? ' · tú' : ''}</b><small>Residente de obra${res.telefono ? ' · ' + esc(res.telefono) : ''}${(() => { const a = o.historial.find(hh => hh.hasta); return a ? ' · antes: ' + esc(a.nombre) : ''; })()}</small></div>
+              ${esJefe() ? `<button class="tbtn tbtn--sm o-cambiar" type="button" data-cambiar-res="${esc(o.id)}">${I.user}<span>Cambiar residente</span></button>` : ''}</div>
             ${sup.map(s => `<p class="o-sup">${I.user}<span>Suplente: <b>${esc(s.nombre)}</b> · ${esc(fDate(s.desde))} al ${esc(fDate(s.hasta))}${s.desde > h ? ' (programada)' : ''}${s.motivo ? ' · ' + esc(s.motivo) : ''}</span></p>`).join('')}
           </article>`;
         }).join('')}</div>` : `<div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">Sin obras</h2><p class="muted">${esJefe() ? 'Agrega la primera obra y asígnale su residente.' : 'Dirección o el admin técnico dan de alta las obras.'}</p>${esJefe() ? `<div class="empty-acts"><button class="btn btn--solid" type="button" data-act="nueva-obra">${I.plus}<span>Agregar obra</span></button></div>` : ''}</div>`}
       </section>`,
       bind(sec) {
+        $$('[data-cambiar-res]', sec).forEach(b => b.addEventListener('click', e => { e.stopPropagation(); drResidente(obra(b.dataset.cambiarRes)); }));
         $$('[data-obra]', sec).forEach(c => {
-          c.addEventListener('click', e => { if (e.target.closest('a')) return; drObra(obra(c.dataset.obra)); });
+          c.addEventListener('click', e => { if (e.target.closest('a, button')) return; drObra(obra(c.dataset.obra)); });
           c.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === c) drObra(obra(c.dataset.obra)); });
         });
       }
@@ -1276,10 +1336,15 @@
           <label class="fld"><span class="fld-l">Estatus</span><select class="in" name="estatus"${dis}><option value="activa"${x.estatus !== 'cerrada' ? ' selected' : ''}>Activa</option><option value="cerrada"${x.estatus === 'cerrada' ? ' selected' : ''}>Cerrada</option></select></label>
           <label class="fld fld--wide"><span class="fld-l">Dirección</span><input class="in" name="direccion" value="${esc(x.direccion)}"${dis}></label>
         </div></div></fieldset>
-        <fieldset class="fs"><legend><span class="mono">2</span>Residente de obra</legend><div class="fs-b">
+        ${nueva ? '' : `<fieldset class="fs"><legend><span class="mono">2</span>Residente de obra</legend><div class="fs-b">
+          <div class="res-now"><span class="p-av">${esc(api.iniciales(x.residente.nombre))}</span><div><b>${esc(x.residente.nombre || 'Sin residente')}</b><small>Titular${(() => { const v = x.historial.find(hh => !hh.hasta); return v ? ' desde el ' + esc(fDate(v.desde)) : ''; })()}</small></div>
+            ${jefe ? `<button type="button" class="tbtn tbtn--sm" data-cambiar>${I.user}<span>Cambiar residente</span></button>` : ''}</div>
+          ${historialHTML(x)}
+        </div></fieldset>`}
+        ${!nueva ? '' : `<fieldset class="fs"><legend><span class="mono">2</span>Residente de obra</legend><div class="fs-b">
           <label class="fld"><span class="fld-l">Residente titular</span><select class="in" name="residente"${dis}><option value="">Sin asignar</option>${residentes.map(p => `<option value="${esc(p.id)}"${p.id === x.residenteId ? ' selected' : ''}>${nom(p)}</option>`).join('')}</select>
           <span class="fld-h">${residentes.length ? 'Solo aparecen usuarios con rol de residente.' : 'Todavía no hay usuarios con rol de residente: invítalos en <a class="link-u" href="#/usuarios">Usuarios</a>.'} Su celular para avisos se edita en Usuarios.</span></label>
-        </div></fieldset>
+        </div></fieldset>`}
         ${nueva ? '' : `<fieldset class="fs"><legend><span class="mono">3</span>Suplentes temporales</legend><div class="fs-b">
           <p class="fld-h">Por enfermedad o ausencia: el suplente puede crear y enviar requisiciones de esta obra solo entre las fechas indicadas. El acceso vence solo.</p>
           <ul class="sup-list">${x.suplentes.length ? x.suplentes.map(s => `<li class="${s.hasta < h ? 'is-off' : ''}"><span><b>${esc(s.nombre)}</b> · ${esc(fDate(s.desde))} al ${esc(fDate(s.hasta))}${s.hasta < h ? ' · vencida' : s.desde > h ? ' · programada' : ' · vigente'}${s.motivo ? `<small>${esc(s.motivo)}</small>` : ''}</span><button type="button" class="ibtn" data-sup-x="${esc(s.id)}" aria-label="Quitar suplencia">${I.trash}</button></li>`).join('') : '<li class="muted">Sin suplencias.</li>'}</ul>
@@ -1297,6 +1362,8 @@
       const f = $('form', panel), err = () => $('[data-err]', panel);
       if (jefe) f.addEventListener('input', e => { if (!e.target.closest('.sup-add')) api.markDirty(); });
       const reabrir = async () => { await cargar(); api.rerender(); drObra(obra(x.id)); };
+      const cam = $('[data-cambiar]', panel);
+      if (cam) cam.addEventListener('click', () => drResidente(obra(x.id)));
       const add = $('[data-sup-add]', panel);
       if (add) add.addEventListener('click', async () => {
         const pid = f.sperfil.value, d1 = f.sdesde.value, d2 = f.shasta.value;
@@ -1316,11 +1383,56 @@
         const anterior = o ? o.nombre : '';
         ocupado(panel, true, 'Guardando…');
         try {
-          await R.guardarObra({ id: o ? o.id : '', nombre, clave: f.clave.value.trim().replace(/\s+/g, ''), direccion: f.direccion.value.trim(), estatus: f.estatus.value, residenteId: f.residente.value });
+          await R.guardarObra({ id: o ? o.id : '', nombre, clave: f.clave.value.trim().replace(/\s+/g, ''), direccion: f.direccion.value.trim(), estatus: f.estatus.value, residenteId: nueva ? f.residente.value : x.residenteId });
         } catch (x2) { ocupado(panel, false, 'Guardar'); err().textContent = x2.message; return; }
         await syncListaObras(anterior, nombre);
         await cargar();
         api.closeDrawer(true); toast(nueva ? 'Obra agregada.' : 'Obra actualizada.'); api.rerender();
+      });
+    });
+  }
+
+  // Historial de residentes de una obra (v0.7: la base lo anota sola en cada cambio)
+  function historialHTML(o) {
+    const hs = o.historial.filter(hh => hh.hasta);
+    if (!hs.length) return '';
+    return `<div class="res-hist"><small class="muted">Residentes anteriores</small><ul>${hs.map(hh => `<li><b>${esc(hh.nombre)}</b><span>${esc(fDate(hh.desde))} al ${esc(fDate(hh.hasta))}${hh.nota ? ' · ' + esc(hh.nota) : ''}</span></li>`).join('')}</ul></div>`;
+  }
+
+  // Cambio de residente (jefes): cuenta desde hoy y queda en el historial
+  function drResidente(o) {
+    if (!esJefe()) { toast('Solo Dirección y el admin técnico cambian al residente.'); return; }
+    if (!o) return;
+    const cands = N.perfiles().filter(p => p.activo && p.rol === 'residente' && p.id !== o.residenteId)
+      .sort((a, b) => (a.nombre || a.correo).localeCompare(b.nombre || b.correo, 'es'));
+    api.openPanel(`<form class="dr-form" novalidate>
+      ${drHead(esc(o.nombre), 'Cambiar residente')}
+      <div class="dr-b">
+        <fieldset class="fs"><legend><span class="mono">1</span>Residente actual</legend><div class="fs-b">
+          <div class="res-now"><span class="p-av">${esc(api.iniciales(o.residente.nombre))}</span><div><b>${esc(o.residente.nombre || 'Sin residente')}</b><small>${(() => { const v = o.historial.find(hh => !hh.hasta); return v ? 'Titular desde el ' + esc(fDate(v.desde)) : 'Titular'; })()}</small></div></div>
+          ${historialHTML(o)}
+        </div></fieldset>
+        <fieldset class="fs"><legend><span class="mono">2</span>Nuevo residente</legend><div class="fs-b">
+          <label class="fld"><span class="fld-l">Residente <em>*</em></span><select class="in" name="nuevo" required><option value="">Elige a una persona…</option>${cands.map(p => `<option value="${esc(p.id)}">${esc(p.nombre || p.correo)}</option>`).join('')}${o.residenteId ? '<option value="-">Dejar la obra sin residente</option>' : ''}</select>
+            <span class="fld-h">${cands.length ? 'Solo aparecen usuarios con rol de residente.' : 'No hay otros usuarios con rol de residente: invítalos en <a class="link-u" href="#/usuarios">Usuarios</a>.'}</span></label>
+          <label class="fld"><span class="fld-l">Motivo (opcional)</span><input class="in" name="nota" placeholder="Cambio de obra, baja, rotación…"></label>
+          <p class="fld-h">El cambio cuenta desde hoy. El nuevo residente ve y envía las requisiciones de la obra y recibe los avisos por correo; el anterior deja de verlas. Para una ausencia temporal mejor asigna un suplente.</p>
+        </div></fieldset>
+      </div>
+      ${drFoot('Cambiar residente')}
+    </form>`, {}, panel => {
+      const f = $('form', panel), err = $('[data-err]', panel);
+      f.addEventListener('input', api.markDirty);
+      f.addEventListener('submit', async e => {
+        e.preventDefault();
+        if (!f.nuevo.value) { err.textContent = 'Elige al nuevo residente.'; return; }
+        ocupado(panel, true, 'Guardando…');
+        try { await R.cambiarResidente(o.id, f.nuevo.value === '-' ? '' : f.nuevo.value, f.nota.value); }
+        catch (x) { ocupado(panel, false, 'Cambiar residente'); err.textContent = x.message; return; }
+        await cargar();
+        api.closeDrawer(true);
+        toast('Residente cambiado. Queda en el historial de la obra.');
+        api.rerender();
       });
     });
   }
@@ -1344,7 +1456,7 @@
       <div class="pf-h"><div class="pf-logo">${api.logoSVG()}</div><div class="pf-t"><h1>${esc(tituloFormato(r))}</h1><p><span>SEMANA: ${r.semana}</span><span>CORTE: ${esc(corte(r))}</span></p></div></div>
       <table><colgroup><col style="width:4%"><col style="width:22%"><col style="width:7%"><col style="width:7%"><col style="width:8%"><col style="width:31%"><col style="width:21%"></colgroup>
         <thead><tr>${COLS.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
-        <tbody>${filasFormato(r).map((p, i) => `<tr><td>${i + 1}</td><td>${p ? esc(p.insumo) : ''}</td><td>${p ? esc(p.unidad) : ''}</td><td>${p ? qty(p.cantidad) : ''}</td><td>${p ? ddmmyy(suministro(r, p)) : ''}</td><td>${p ? esc(p.observaciones) : ''}</td><td>${p ? esc(p.destino) : ''}</td></tr>`).join('')}</tbody>
+        <tbody>${filasFormato(r).map((p, i) => `<tr><td>${i + 1}</td><td>${p ? esc(p.insumo) : ''}</td><td>${p ? esc(p.unidad) : ''}</td><td>${p ? qty(p.cantidad) : ''}</td><td>${p ? ddmmyy(suministro(r)) : ''}</td><td>${p ? esc(p.observaciones) : ''}</td><td>${p ? esc(p.destino) : ''}</td></tr>`).join('')}</tbody>
       </table>
       <div class="pf-firmas">${FIRMAS.map(t => `<div>${t}</div>`).join('')}</div>
       ${proc.length ? `<h2>PROCESO DE ENVIO DE REQUISICIONES:</h2><ol>${proc.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
@@ -1368,7 +1480,7 @@
       <tr><td colspan="2" style="text-align:center;font-weight:bold;font-size:9pt">SEMANA: ${r.semana}</td><td colspan="3" style="text-align:center;font-weight:bold;font-size:9pt">CORTE: ${esc(corte(r))}</td></tr>
       <tr><td colspan="7"></td></tr>
       <tr style="height:44pt">${COLS.map(th).join('')}</tr>
-      ${filasFormato(r).map((p, i) => `<tr>${td(i + 1)}${td(p ? esc(p.insumo) : '')}${td(p ? esc(p.unidad) : '')}${td(p ? p.cantidad : '')}${td(p ? ddmmyy(suministro(r, p)) : '', "mso-number-format:'\\@'")}${td(p ? esc(p.observaciones) : '')}${td(p ? esc(p.destino) : '')}</tr>`).join('')}
+      ${filasFormato(r).map((p, i) => `<tr>${td(i + 1)}${td(p ? esc(p.insumo) : '')}${td(p ? esc(p.unidad) : '')}${td(p ? p.cantidad : '')}${td(p ? ddmmyy(suministro(r)) : '', "mso-number-format:'\\@'")}${td(p ? esc(p.observaciones) : '')}${td(p ? esc(p.destino) : '')}</tr>`).join('')}
       <tr><td colspan="7" style="height:40pt"></td></tr>
       <tr><td></td><td colspan="2" style="border-top:.5pt solid #000;text-align:center;font-weight:bold;font-size:9pt">${FIRMAS[0]}</td><td colspan="2"></td><td colspan="2" style="border-top:.5pt solid #000;text-align:center;font-weight:bold;font-size:9pt">${FIRMAS[1]}</td></tr>
       <tr><td colspan="7"></td></tr>

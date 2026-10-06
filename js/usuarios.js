@@ -16,9 +16,9 @@
   const ok = ({ data, error }) => { if (error) throw new Error(N.traducir(error)); return data; };
 
   const ROLES = [
-    { id: 'direccion', puede: 'Todo. Sube los comprobantes de pago y administra usuarios y obras.' },
-    { id: 'admin', puede: 'Todo, igual que Dirección: mantenimiento y soporte de la plataforma.' },
-    { id: 'compras', puede: 'Edita el directorio; ve las requisiciones revisadas; registra cotizaciones, facturas y XML.' },
+    { id: 'direccion', puede: 'Todo. Sube los comprobantes de pago y administra usuarios y obras (cambia residentes).' },
+    { id: 'admin', puede: 'Todo, igual que Dirección, y además corrige requisiciones ya enviadas o revisadas: mantenimiento y soporte de la plataforma.' },
+    { id: 'compras', puede: 'Edita el directorio; ve las requisiciones revisadas; registra cotizaciones, facturas, XML y comprobantes de pago.' },
     { id: 'coordinador', puede: 'Ve todas las obras; aprueba o rechaza cada material, devuelve requisiciones y asigna suplentes.' },
     { id: 'residente', puede: 'Solo su obra (o la que cubre como suplente): arma y envía requisiciones y sube la remisión al recibir.' }
   ];

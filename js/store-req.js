@@ -1,5 +1,7 @@
 /* =========================================================
    GALITHA · Requisiciones de obra, obras y compras — Datos
+   v0.7: + historial de residentes (obra_residentes) y avisos por correo
+   de requisiciones (avisos).
    v0.5: guarda en Supabase (obras, obra_suplentes, requisiciones,
    partidas, compras, compra_partidas, compra_documentos, config)
    y los archivos en la carpeta privada "documentos".
@@ -41,6 +43,7 @@
       const p = o.residente_id && window.Nube.perfiles().find(x => x.id === o.residente_id);
       return { nombre: p ? (p.nombre || p.correo) : '', correo: p ? p.correo : '', telefono: p ? p.telefono || '' : '' };
     })(),
+    historial: [],   // residentes anteriores (v0.7, tabla obra_residentes); se llena en cargar()
     suplentes: arr(o.obra_suplentes).map(s => ({ id: s.id, perfilId: s.perfil_id, nombre: quien(s.perfil_id), desde: s.desde, hasta: s.hasta, motivo: str(s.motivo) }))
       .sort((a, b) => b.desde.localeCompare(a.desde)),
     actualizadoEn: o.actualizado_en
@@ -62,6 +65,7 @@
     devueltaEn: r.devuelta_en || '', devueltaPor: quien(r.devuelta_por),
     revisadaEn: r.revisada_en || '', revisadaPor: quien(r.revisada_por),
     partidas: arr(r.partidas).map(dePartida).sort((a, b) => a.orden - b.orden),
+    avisos: [],      // correos automáticos de la requisición (v0.7, tabla avisos); se llenan en cargar()
     actualizadoEn: r.actualizado_en
   });
 
@@ -106,13 +110,18 @@
   /* ---------- Estado en memoria ---------- */
   let db = { obras: [], requisiciones: [], compras: [], config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
 
+  // Tablas nuevas de la v0.7: si aún no se corre 04-ajustes.sql, la app sigue funcionando sin ellas
+  const opcional = q => q.then(r => (r.error ? { data: [], error: null } : r), () => ({ data: [], error: null }));
+
   async function cargar() {
-    const [, obras, reqs, compras, config] = await Promise.all([
+    const [, obras, reqs, compras, config, hist, avisos] = await Promise.all([
       window.Nube.recargarPerfiles(),   // nombres de residentes, suplentes y de quién hizo cada cosa
       sb().from('obras').select('*, obra_suplentes(*)').order('nombre'),
       sb().from('requisiciones').select('*, partidas(*)').order('anio', { ascending: false }).order('semana', { ascending: false }),
       sb().from('compras').select('*, compra_partidas(partida_id), compra_documentos(*)'),
-      sb().from('config').select('clave, valor')
+      sb().from('config').select('clave, valor'),
+      opcional(sb().from('obra_residentes').select('*').order('desde', { ascending: false })),
+      opcional(sb().from('avisos').select('*').order('en', { ascending: false }))
     ]);
     const d = {
       obras: ok(obras).map(deObra),
@@ -123,6 +132,16 @@
     ok(config).forEach(c => {
       if (c.clave === 'empresa') { const e = obj(c.valor); d.config.empresa = { nombre: str(e.nombre), rfc: str(e.rfc).toUpperCase(), correoRequisiciones: str(e.correoRequisiciones) }; }
       if (c.clave === 'proceso') d.config.proceso = arr(c.valor).map(str).filter(Boolean);
+    });
+    ok(hist).forEach(h => {
+      const o = d.obras.find(x => x.id === h.obra_id);
+      if (o) o.historial.push({ id: h.id, perfilId: h.perfil_id || '', nombre: quien(h.perfil_id) || 'Sin residente', desde: fecha(h.desde), hasta: fecha(h.hasta), nota: str(h.nota), por: quien(h.cambiado_por) });
+    });
+    // Más reciente primero; el periodo abierto (residente actual) antes que uno cerrado del mismo día
+    d.obras.forEach(o => o.historial.sort((a, b) => b.desde.localeCompare(a.desde) || (a.hasta ? 1 : 0) - (b.hasta ? 1 : 0)));
+    ok(avisos).forEach(a => {
+      const r = a.requisicion_id && d.requisiciones.find(x => x.id === a.requisicion_id);
+      if (r) r.avisos.push({ evento: str(a.evento), en: a.en, por: quien(a.por), para: arr(a.para) });
     });
     // Liga material ↔ compra y compra ↔ requisición
     const porPartida = new Map();
@@ -183,6 +202,12 @@
       else { o.id = o.id || uid(); ok(await sb().from('obras').insert(Object.assign({ id: o.id }, fila)).select('id')); }
       return o.id;
     },
+    // Cambio de residente: la base cierra el periodo del anterior y abre el del nuevo (historial); la nota es opcional
+    async cambiarResidente(obraId, perfilId, nota) {
+      const filas = ok(await sb().from('obras').update({ residente_id: perfilId || null }).eq('id', obraId).select('id'));
+      if (!filas.length) throw new Error('Solo Dirección y el admin técnico cambian al residente.');
+      if (str(nota)) await sb().from('obra_residentes').update({ nota: str(nota) }).eq('obra_id', obraId).is('hasta', null);
+    },
     async agregarSuplente(obraId, perfilId, desde, hasta, motivo) {
       ok(await sb().from('obra_suplentes').insert({ obra_id: obraId, perfil_id: perfilId, desde, hasta, motivo: str(motivo) }).select('id'));
     },
@@ -192,7 +217,8 @@
     },
 
     /* Requisiciones: r = { id?, obraId, anio, semana, tipo, folio, fechaSuministro, nota }, partidas = [{ id?, insumo, … }] */
-    async guardarRequisicion(r, partidas) {
+    // opts.aprobar: los materiales nuevos entran aprobados (corrección del admin técnico; la base lo vuelve a revisar)
+    async guardarRequisicion(r, partidas, opts = {}) {
       const nueva = !(r.id && find('requisiciones', r.id));
       const fila = { tipo: r.tipo === 'extraordinaria' ? 'extraordinaria' : 'ordinaria', folio: str(r.folio), fecha_suministro: r.fechaSuministro || null, nota: str(r.nota) };
       if (nueva) {
@@ -212,7 +238,7 @@
       const nuevas = [];
       for (let i = 0; i < partidas.length; i++) {
         const p = partidas[i], f = aFila(p, i), prev = p.id && antes.find(x => x.id === p.id);
-        if (!prev) { nuevas.push(Object.assign({ id: p.id || uid(), requisicion_id: r.id }, f)); continue; }
+        if (!prev) { nuevas.push(Object.assign({ id: p.id || uid(), requisicion_id: r.id }, f, opts.aprobar ? { aprobacion: 'aprobada' } : {})); continue; }
         const igual = prev.orden === i && prev.insumo === f.insumo && prev.unidad === f.unidad && prev.cantidad === f.cantidad
           && prev.observaciones === f.observaciones && prev.destino === f.destino && (prev.fechaSuministro || null) === f.fecha_suministro;
         if (!igual) ok(await sb().from('partidas').update(f).eq('id', p.id).select('id'));
@@ -298,6 +324,17 @@
       }
       const c = find('compras', compraId);
       if (c && c.pago) c.pago.aviso = data.aviso;
+      return data;
+    },
+    // Correo automático de una requisición: Edge Function "aviso-requisicion"
+    //   enviada → coordinador · devuelta → residente y suplentes · revisada → residente y suplentes si hubo rechazos
+    async avisarRequisicion(id, evento) {
+      const { data, error } = await sb().functions.invoke('aviso-requisicion', { body: { requisicion_id: id, evento } });
+      if (error) {
+        let msg = '';
+        try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
+        throw new Error(msg || 'No se pudo enviar el correo (¿está publicada la función "aviso-requisicion" en Supabase?).');
+      }
       return data;
     },
     // Liga temporal (1 hora) para ver o descargar un archivo privado

@@ -153,7 +153,10 @@
     const tels = [...(c ? c.telefonos : []), ...p.telefonos];
     return { c, wa: tels.find(t => t.whatsapp), tel: tels[0], mail: (c && c.correo) || p.correo };
   };
-  const iniciales = s => String(s || '?').replace(/^(ing|arq|lic|dr|dra)\.?\s+/i, '').split(/\s+/).filter(w => w.length > 2 || /^[A-ZÁÉÍÓÚÑ]/.test(w)).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+  // Quita los títulos del principio del nombre ("Arq. Paola Ruiz" → "Paola Ruiz"); pueden ser varios ("Ing. Arq. …")
+  const TITULO = /^(?:arq|ing|lic|dra?|mtr[oa]|c\.?\s?p|sr|sra|srta|prof|profa|tec|ph\.?\s?d)(?:\.\s*|\s+)/i;
+  const sinTitulo = s => { let t = String(s || '').trim(); while (TITULO.test(t)) t = t.replace(TITULO, ''); return t || String(s || '').trim(); };
+  const iniciales = s => sinTitulo(s || '?').split(/\s+/).filter(w => w.length > 2 || /^[A-ZÁÉÍÓÚÑ]/.test(w)).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
   // Color del avatar según el tipo de proveedor (5 tonos)
   const tono = p => {
     const i = (LISTAS.tipos || []).indexOf(p.tipo);
@@ -474,7 +477,7 @@
             <div class="sq-row"><strong>${favs}</strong>${favs ? `<button class="sq-go" type="button" data-ver-fav aria-label="Ver favoritos" title="Ver favoritos">${I.arrow}</button>` : '<small>Marca con la estrella a los que más usas</small>'}</div>
           </div>
           <div class="sq rv" style="--d:140">
-            <p>Contactos activos</p>
+            <p>Personas de contacto</p>
             <div class="sq-row"><strong>${personas.length}</strong><span class="avs" aria-hidden="true">${personas.slice(0, 3).map(c => `<i>${esc(iniciales(c.nombre))}</i>`).join('')}${personas.length > 3 ? `<i>+${personas.length - 3}</i>` : ''}</span></div>
           </div>
         </div>
@@ -1571,7 +1574,7 @@
      como una función que recibe esta API y devuelve sus páginas y ganchos. */
   const API = {
     esc, norm, digits, pad, ico, I, ARR, markSVG, logoSVG, today, mobileMQ, reduced,
-    toast, confirmar, preguntar, rerender: () => rerender(), iniciales, openPanel, closeDrawer, markDirty, descargar, panel, dl,
+    toast, confirmar, preguntar, rerender: () => rerender(), iniciales, sinTitulo, openPanel, closeDrawer, markDirty, descargar, panel, dl,
     refresh: () => refresh(), proveedores: () => DATA, listas: () => LISTAS, nombreProveedor: nombre, Store: S
   };
   const MODS = (window.GALITHA_MODULOS || []).map(f => f(API)).filter(Boolean);
@@ -1612,8 +1615,26 @@
   }
   function rerender() { return render(parse(), true); }
 
+  // "Inicio" (barra lateral, menú y logo) abre la bienvenida a pantalla completa encima de la página actual;
+  // al cerrarla se queda donde estaba. Si se llega con la liga #/inicio, la página de abajo es Obras.
+  function abrirInicio() {
+    if (!BV) return false;
+    toggleMenu(false);
+    BV.abrir(Promise.resolve(), { volver: true });
+    return true;
+  }
+  document.addEventListener('click', e => {
+    const a = e.target.closest('a[href="#/inicio"]');
+    if (a && abrirInicio()) e.preventDefault();
+  }, true);
+
   async function go() {
-    const r = parse();
+    let r = parse();
+    if (r.page === 'inicio' && BV) {
+      history.replaceState(null, '', '#/' + (current !== null ? current : 'obras'));
+      abrirInicio();
+      r = parse();
+    }
     if (busy || r.key === current) return;
     const first = current === null;
     current = r.key;
@@ -1622,11 +1643,11 @@
     if (first || reduced) { await render(r); if (!first) $('#view').focus({ preventScroll: true }); return; }
     busy = true;
     curtain.classList.remove('out'); curtain.classList.add('in');
-    await wait(880);   // franjas cerradas (~0.62 s) + isotipo armado (~0.86 s)
+    await wait(520);   // franjas cerradas (~0.46 s) + isotipo armado (~0.52 s); v0.7: más rápida a pedido de la oficina
     try { await render(r); } finally {
       curtain.classList.add('out');
       $('#view').focus({ preventScroll: true });
-      await wait(660);
+      await wait(460);
       curtain.classList.remove('in', 'out');
       busy = false;
     }

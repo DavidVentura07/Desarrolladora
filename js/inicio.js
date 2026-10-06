@@ -5,6 +5,9 @@
    - Bienvenida a pantalla completa: la misma vista, una vez por
      sesión del navegador (como el preloader), después de entrar.
      "Entrar a la plataforma" lleva a Obras.
+   - v0.7: "Inicio" (barra lateral, menú, logo) abre esta misma
+     bienvenida a pantalla completa y al entrar regresa a la página
+     donde estaba. La página #/inicio con barra lateral ya no se usa.
    ========================================================= */
 (window.GALITHA_MODULOS = window.GALITHA_MODULOS || []).push(api => {
   const N = window.Nube;
@@ -59,7 +62,8 @@
   }
 
   function weHTML(c, { overlay }) {
-    const nombre = ((N.perfil && (N.perfil.nombre || N.perfil.correo)) || '').split(/[\s@]/)[0];
+    // Primer nombre, sin el título ("Arq. Paola Ruiz" → "Paola")
+    const nombre = N.perfil ? (N.perfil.nombre ? api.sinTitulo(N.perfil.nombre) : (N.perfil.correo || '')).split(/[\s@]/)[0] : '';
     const btn = overlay
       ? `<button class="btn btn--solid" type="button" data-we-entrar>Entrar a la plataforma ${ARR}</button>`
       : `<a class="btn btn--solid" href="#/obras">Ir a obras ${ARR}</a>`;
@@ -82,12 +86,11 @@
             <div><b data-cnt="${c.proveedores}">0</b><small>Proveedores</small></div>
           </div>
         </div>
-        <div class="we-foot we-fx" style="--d:1100"><span>${nombre ? 'Hola, ' + esc(nombre) : ''}</span><span>v0.6 · en línea</span></div>
+        <div class="we-foot we-fx" style="--d:1100"><span>${nombre ? 'Hola, ' + esc(nombre) : ''}</span><span>v0.7 · en línea</span></div>
         <div class="we-ghost">${markSVG()}</div>
       </div>
       <div class="we-stage">
         <div class="we-top">
-          <span class="we-pill"><i></i>Portafolio Galitha</span>
           <div class="we-nav">
             <button type="button" data-we-dir="-1" aria-label="Render anterior">${I.back}</button>
             <button type="button" data-we-dir="1" aria-label="Render siguiente">${I.arrow}</button>
@@ -183,7 +186,9 @@
   const pendiente = () => !leer();
 
   // listo: promesa que se cumple cuando ya se puede abrir (preloader terminado)
-  async function bienvenida(listo) {
+  // volver: se abrió desde "Inicio"; al entrar se queda en la página donde estaba (v0.7)
+  async function bienvenida(listo, { volver = false } = {}) {
+    if (document.getElementById('welcome')) return;   // ya está abierta
     marcar();
     const box = document.createElement('div');
     box.id = 'welcome';
@@ -196,13 +201,15 @@
     document.body.appendChild(box);
     document.body.classList.add('welcome-open');
     const open = $('.we-open', box);
+    if (volver && !reduced) { open.classList.add('entra'); box.classList.add('entrando'); }   // las franjas cubren la página actual
 
     const c = await cifras();
     $('.we--full', box).innerHTML = weHTML(c, { overlay: true });
     const root = $('.we--full', box);
     const car = montar(root);
     await listo;
-    await new Promise(r => setTimeout(r, reduced ? 0 : 700));
+    await new Promise(r => setTimeout(r, reduced ? 0 : volver ? 480 : 700));
+    open.classList.remove('entra'); box.classList.remove('entrando');
     open.classList.add('out');
     car.arrancar();
 
@@ -211,7 +218,7 @@
       if (saliendo) return; saliendo = true;
       car.parar();
       // Una liga directa (compra, requisición, proveedor) se respeta; si no, Obras
-      if (!/^#\/(c|r|p)\//.test(location.hash) && location.hash !== '#/obras') location.hash = '#/obras';
+      if (!volver && !/^#\/(c|r|p)\//.test(location.hash) && location.hash !== '#/obras') location.hash = '#/obras';
       root.classList.add('leave');
       open.classList.remove('out');
       open.querySelector('.curtain-mark').innerHTML = markSVG();
@@ -219,7 +226,7 @@
         box.classList.add('bye');
         document.body.classList.remove('welcome-open');
         setTimeout(() => box.remove(), 900);
-      }, reduced ? 0 : 1200);
+      }, reduced ? 0 : volver ? 700 : 1200);
       removeEventListener('keydown', tecla);
     };
     const tecla = e => { if (e.key === 'Escape' || e.key === 'Enter') entrar(); };

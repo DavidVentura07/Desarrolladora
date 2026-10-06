@@ -179,26 +179,26 @@ tr.rv { transform: translateY(8px); }
 /* ---------- Cortina: franjas horizontales con brillo + isotipo que se arma ---------- */
 #curtain { position: fixed; inset: 0; z-index: 250; display: flex; flex-direction: column; pointer-events: none; }
 /* Cada franja se encima 1 px con la siguiente para que no quede una rendija blanca entre ellas (alturas fraccionarias) */
-#curtain > i { flex: 1; margin: -1px 0; background: linear-gradient(90deg, var(--navy-deep), var(--navy) 60%, #2443B8); transform: scaleX(0); transform-origin: left; transition: transform .5s var(--ease); backface-visibility: hidden; }
-#curtain > i:nth-child(2) { transition-delay: .03s; } #curtain > i:nth-child(3) { transition-delay: .06s; }
-#curtain > i:nth-child(4) { transition-delay: .09s; } #curtain > i:nth-child(5) { transition-delay: .12s; }
+#curtain > i { flex: 1; margin: -1px 0; background: linear-gradient(90deg, var(--navy-deep), var(--navy) 60%, #2443B8); transform: scaleX(0); transform-origin: left; transition: transform .38s var(--ease); backface-visibility: hidden; }
+#curtain > i:nth-child(2) { transition-delay: .02s; } #curtain > i:nth-child(3) { transition-delay: .04s; }
+#curtain > i:nth-child(4) { transition-delay: .06s; } #curtain > i:nth-child(5) { transition-delay: .08s; }
 #curtain.in { pointer-events: all; }
 #curtain.in > i { transform: scaleX(1); }
 #curtain.out > i { transform-origin: right; transform: scaleX(0); }
 .curtain-mark { position: absolute; left: 50%; top: 50%; width: 60px; color: #fff; transform: translate(-50%, -50%); opacity: 0; filter: drop-shadow(0 0 18px rgba(124, 147, 255, .9)); transition: opacity .25s; }
 .curtain-mark rect, .curtain-mark path { transform-box: fill-box; transform-origin: left center; transform: scaleX(0); }
 .curtain-mark .m2 { transform-origin: right center; }
-#curtain.in .curtain-mark { opacity: 1; transition-delay: .2s; }
-#curtain.in .curtain-mark rect, #curtain.in .curtain-mark path { animation: mod .4s var(--ease) forwards; }
-#curtain.in .curtain-mark > svg > :nth-child(1) { animation-delay: .22s !important; }
-#curtain.in .curtain-mark > svg > :nth-child(2) { animation-delay: .25s !important; }
-#curtain.in .curtain-mark > svg > :nth-child(3) { animation-delay: .28s !important; }
-#curtain.in .curtain-mark > svg > :nth-child(4) { animation-delay: .31s !important; }
-#curtain.in .curtain-mark > svg > :nth-child(5) { animation-delay: .34s !important; }
-#curtain.in .curtain-mark > svg > :nth-child(6) { animation-delay: .37s !important; }
-#curtain.in .curtain-mark > svg > :nth-child(7) { animation-delay: .40s !important; }
-#curtain.in .curtain-mark > svg > :nth-child(8) { animation-delay: .43s !important; }
-#curtain.in .curtain-mark > svg > :nth-child(9) { animation-delay: .46s !important; }
+#curtain.in .curtain-mark { opacity: 1; transition-delay: .1s; }
+#curtain.in .curtain-mark rect, #curtain.in .curtain-mark path { animation: mod .26s var(--ease) forwards; }
+#curtain.in .curtain-mark > svg > :nth-child(1) { animation-delay: 0.10s !important; }
+#curtain.in .curtain-mark > svg > :nth-child(2) { animation-delay: 0.12s !important; }
+#curtain.in .curtain-mark > svg > :nth-child(3) { animation-delay: 0.14s !important; }
+#curtain.in .curtain-mark > svg > :nth-child(4) { animation-delay: 0.16s !important; }
+#curtain.in .curtain-mark > svg > :nth-child(5) { animation-delay: 0.18s !important; }
+#curtain.in .curtain-mark > svg > :nth-child(6) { animation-delay: 0.20s !important; }
+#curtain.in .curtain-mark > svg > :nth-child(7) { animation-delay: 0.22s !important; }
+#curtain.in .curtain-mark > svg > :nth-child(8) { animation-delay: 0.24s !important; }
+#curtain.in .curtain-mark > svg > :nth-child(9) { animation-delay: 0.26s !important; }
 #curtain.out .curtain-mark { opacity: 0; transition-delay: .08s; }
 
 /* =========================================================
@@ -1157,7 +1157,7 @@ a.fchip:hover { background: var(--lav); }
 .ocard .av { background: var(--navy); color: #fff; font-size: 14px; letter-spacing: 0; }
 
 /* Formulario de requisición: renglones de materiales */
-.prow-h, .prow { display: grid; grid-template-columns: 26px minmax(0, 2.2fr) 96px 84px minmax(0, 1.4fr) minmax(0, 1.4fr) 132px 32px; gap: 6px; align-items: center; }
+.prow-h, .prow { display: grid; grid-template-columns: 26px minmax(0, 2.2fr) 96px 84px minmax(0, 1.4fr) minmax(0, 1.4fr) 32px; gap: 6px; align-items: center; }
 .prow-h { padding: 0 2px 4px; color: var(--muted); font-size: 11.5px; font-weight: 700; }
 .prows { display: flex; flex-direction: column; gap: 6px; }
 .prow > i { font-style: normal; color: var(--muted); font-size: 12px; font-weight: 700; text-align: center; }
@@ -1184,7 +1184,7 @@ body[data-page="requisiciones"] .menu-foot .rol, body[data-page="compras"] .menu
 .menu-foot .rol button[aria-pressed="true"] { background: #fff; color: var(--navy); }
 
 .panel-b--flush { padding: 8px 0 6px; }
-.panel-b--flush .tablewrap { border-radius: 0; }
+.panel-b--flush .tablewrap { border-radius: 0 0 var(--r-lg) var(--r-lg); }  /* la tabla no se sale de las esquinas redondeadas de la tarjeta */
 .tbl th.num, .tbl td.num { text-align: right; }
 .tbl .pl { padding-left: 24px; }
 .tbl .pr { padding-right: 24px; }
@@ -1468,9 +1468,7 @@ body[data-rol="direccion"] .solo-jefes, body[data-rol="admin"] .solo-jefes { dis
 .we-slide img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.12); transition: transform 9s linear; }
 .we-slide.show img { transform: scale(1.02); }
 .we-stage::after { content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; background: linear-gradient(180deg, rgba(11,28,74,.35) 0%, transparent 28%, transparent 55%, rgba(11,28,74,.78) 100%); }
-.we-top { position: absolute; z-index: 3; top: 24px; left: 28px; right: 28px; display: flex; justify-content: space-between; align-items: center; color: #fff; }
-.we-pill { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 99px; background: rgba(255,255,255,.14); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); font-size: 13px; font-weight: 700; }
-.we-pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--sun); }
+.we-top { position: absolute; z-index: 3; top: 24px; left: 28px; right: 28px; display: flex; justify-content: flex-end; align-items: center; color: #fff; }
 .we-nav { display: flex; gap: 8px; }
 .we-nav button { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,.14); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: #fff; transition: background .3s, transform .4s var(--spring); }
 .we-nav button:hover { background: rgba(255,255,255,.28); transform: scale(1.06); }
@@ -1508,6 +1506,10 @@ body.welcome-open { overflow: hidden; }
 .we-open > i:nth-child(2) { transition-delay: .05s; } .we-open > i:nth-child(3) { transition-delay: .1s; }
 .we-open > i:nth-child(4) { transition-delay: .15s; } .we-open > i:nth-child(5) { transition-delay: .2s; }
 .we-open.out > i { transform-origin: right; transform: scaleX(0); }
+.we-open.entra > i { animation: weEntra .38s var(--ease) both; }  /* al abrir desde "Inicio" */
+@keyframes weEntra { from { transform: scaleX(0); } }
+#welcome.entrando { background: transparent; }
+#welcome.entrando .we--full { visibility: hidden; }
 .we-open .curtain-mark { opacity: 1; }
 .we-open .curtain-mark rect, .we-open .curtain-mark path { animation: mod .45s var(--ease) forwards; }
 .we-open.out .curtain-mark { opacity: 0; transition: opacity .25s; }
@@ -1538,3 +1540,36 @@ body.welcome-open { overflow: hidden; }
   .we-slide > i, .we-slide img { transition: none; }
   .we-fx, .we-h span > i { opacity: 1; transform: none; }
 }
+
+/* =========================================================
+   v0.7 · Diferencias en compras (factura, cotización y pago no cuadran al centavo)
+   ========================================================= */
+.note--bad { background: var(--bad-bg); color: #7A1E25; box-shadow: inset 0 0 0 1.5px rgba(180, 49, 58, .35); }
+.note--bad .ico { color: var(--bad); width: 22px; height: 22px; }
+.note--bad b { color: var(--bad); }
+.doc.dif { outline: 2px solid var(--bad); outline-offset: -2px; }
+.doc.dif .doc-n { background: var(--bad); color: #fff; }
+.doc-dif { color: var(--bad); font-weight: 750; }
+.dchip.bad { background: var(--bad); color: #fff; }
+.ccard--dif { outline: 2px solid var(--bad); outline-offset: -2px; }
+.dif-l { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--bad); font-size: 12.5px; font-weight: 700; line-height: 1.4; }
+.dif-l .ico { flex: none; width: 15px; height: 15px; margin-top: 1px; }
+.tagx--dif .ico { width: 14px; height: 14px; }
+.dif-f { display: inline-flex; align-items: center; gap: 6px; height: 42px; padding: 0 16px; border-radius: 99px; background: var(--bad-bg); color: var(--bad); font-size: 13px; font-weight: 750; white-space: nowrap; transition: background .3s, color .3s; }
+.dif-f .ico { width: 16px; height: 16px; }
+.dif-f:hover { background: #F7D2D6; }
+.dif-f[aria-pressed="true"] { background: var(--bad); color: #fff; }
+
+/* v0.7 · Cambio de residente con historial y avisos de requisición */
+.ocard .c-bot { flex-wrap: wrap; }
+.o-cambiar { margin-left: auto; }
+.res-now { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.res-now > div { flex: 1; min-width: 140px; }
+.res-now b { display: block; font-weight: 750; }
+.res-now small { display: block; color: var(--muted); font-size: 12px; font-weight: 600; }
+.res-hist { margin-top: 14px; }
+.res-hist ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.res-hist li { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 10px 12px; border-radius: 14px; background: var(--bg); font-size: 13px; }
+.res-hist li span { color: var(--muted); font-weight: 600; }
+.r-aviso { display: inline-flex; align-items: center; gap: 6px; }
+.r-aviso .ico { width: 15px; height: 15px; color: var(--ok); }
