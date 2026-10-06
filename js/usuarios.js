@@ -205,10 +205,72 @@
     });
   }
 
+  /* ---------- Bitácora (v0.8): quién hizo qué y cuándo; solo jefes ---------- */
+  const TABLAS = {
+    requisiciones: 'Requisición', partidas: 'Material', compras: 'Compra', compra_partidas: 'Material en compra', compra_documentos: 'Documento',
+    obras: 'Obra', obra_suplentes: 'Suplente', proveedores: 'Proveedor', contactos: 'Contacto', listas: 'Lista', perfiles: 'Usuario',
+    invitaciones: 'Invitación', config: 'Configuración'
+  };
+  const ACC = { insert: 'Agregó', update: 'Cambió', delete: 'Borró' };
+  const BF = { tabla: '', quien: '' };
+  const corto = v => { const t = v == null ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v); return t.length > 60 ? t.slice(0, 57) + '…' : t; };
+  // Nombre legible del registro (folio, insumo, nombre, proveedor…)
+  const nombreReg = c => { const x = c || {}; return x.folio || x.insumo || x.nombre_comercial || x.nombre || (x.proveedor && x.proveedor.nombre) || x.tipo || x.correo || x.clave || ''; };
+  const OCULTOS = ['actualizado_en', 'actualizado_por', 'revisada_por', 'suministro_por', 'subido_por', 'creada_por'];
+  function detalle(b) {
+    if (b.accion !== 'update') return `<span class="muted">${esc(corto(nombreReg(b.cambios)))}</span>`;
+    const xs = Object.entries(b.cambios || {}).filter(([k]) => !OCULTOS.includes(k));
+    return `<div class="bit-cambios">${xs.slice(0, 6).map(([k, v]) => `<div><span>${esc(k.replace(/_/g, ' '))}:</span> ${esc(corto(v.antes))} → <b>${esc(corto(v.despues))}</b></div>`).join('')}${xs.length > 6 ? `<span>y ${xs.length - 6} cambios más</span>` : ''}</div>`;
+  }
+  const liga = b => ({ requisiciones: '#/r/', compras: '#/c/', proveedores: '#/p/' }[b.tabla] || '') ;
+
+  async function pageBitacora() {
+    if (!esJefe()) return { title: 'Bitácora', html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">Sin acceso</h2><p class="muted">Solo Dirección y el admin técnico consultan la bitácora.</p></div></section>` };
+    await N.recargarPerfiles();
+    let filas = [];
+    try {
+      let q = sb().from('bitacora').select('*').order('en', { ascending: false }).limit(300);
+      if (BF.tabla) q = q.eq('tabla', BF.tabla);
+      if (BF.quien) q = q.eq('usuario', BF.quien);
+      filas = ok(await q);
+    } catch (e) { toast(e.message); }
+    const gente = N.perfiles().slice().sort((a, b) => (a.nombre || a.correo).localeCompare(b.nombre || b.correo, 'es'));
+    const cuando = s => new Date(s).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    return {
+      title: 'Bitácora',
+      html: `<section class="page">
+        <header class="page-head rv"><div><p class="eyebrow">Solo Dirección y admin técnico</p><h1 class="title">Bitácora</h1></div></header>
+        <div class="note note--info rv" style="--d:60">${I.shield}<p>Cada cambio en la plataforma queda registrado: quién, qué y cuándo. Nadie puede editarla ni borrarla. Se muestran los últimos 300 movimientos con los filtros elegidos.</p></div>
+        <div class="filterbar rv" style="--d:100">
+          <label class="psel${BF.tabla ? ' on' : ''}"><span class="sr">Qué</span><select data-bf="tabla"><option value="">Todo</option>${Object.entries(TABLAS).map(([k, l]) => `<option value="${k}"${BF.tabla === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+          <label class="psel${BF.quien ? ' on' : ''}"><span class="sr">Quién</span><select data-bf="quien"><option value="">Todas las personas</option>${gente.map(g => `<option value="${esc(g.id)}"${BF.quien === g.id ? ' selected' : ''}>${esc(g.nombre || g.correo)}</option>`).join('')}</select></label>
+        </div>
+        <section class="panel rv" style="--d:140">
+          <header class="panel-h"><h2>Movimientos <span class="n">${filas.length}</span></h2></header>
+          <div class="panel-b panel-b--flush"><div class="tablewrap"><table class="tbl">
+            <thead><tr><th class="pl">Cuándo</th><th>Quién</th><th>Qué</th><th class="pr">Detalle</th></tr></thead>
+            <tbody>${filas.map(b => {
+              const l = liga(b), id = b.registro_id;
+              return `<tr>
+                <td class="pl small" style="white-space:nowrap">${esc(cuando(b.en))}</td>
+                <td class="small"><b>${esc(N.nombreDe(b.usuario) || b.correo || 'Sistema')}</b></td>
+                <td class="small"><span class="bit-acc ${esc(b.accion)}">${esc(ACC[b.accion] || b.accion)}</span> ${esc(TABLAS[b.tabla] || b.tabla)}${l && id && b.accion !== 'delete' ? ` · <a class="link-u" href="${l}${esc(id)}">ver</a>` : ''}</td>
+                <td class="pr">${detalle(b)}</td>
+              </tr>`;
+            }).join('') || '<tr><td colspan="4" class="pl muted">Sin movimientos con estos filtros.</td></tr>'}</tbody>
+          </table></div></div>
+        </section>
+      </section>`,
+      bind(sec) {
+        $$('[data-bf]', sec).forEach(el => el.addEventListener('change', () => { BF[el.dataset.bf] = el.value; api.rerender(); }));
+      }
+    };
+  }
+
   return {
-    pages: { usuarios: pageUsuarios },
-    titulos: { usuarios: 'Usuarios' },
-    acciones: { usuarios: { label: 'Invitar usuario', act: 'invitar', puede: esJefe } },
+    pages: { usuarios: pageUsuarios, bitacora: pageBitacora },
+    titulos: { usuarios: 'Usuarios', bitacora: 'Bitácora' },
+    acciones: { usuarios: { label: 'Invitar usuario', act: 'invitar', puede: esJefe }, bitacora: { label: 'Bitácora', act: 'bitacora', puede: () => false } },
     onAct(a) { if (a === 'invitar' && esJefe()) { cargar().then(() => drInvitar(null)).catch(e => toast(e.message)); } }
   };
 });

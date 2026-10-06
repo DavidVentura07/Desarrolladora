@@ -105,7 +105,8 @@
   // Fuera del flujo: aún no se envía, o el coordinador lo rechazó
   const EXTRA = [
     { id: 'borrador', label: 'Borrador', ico: 'draft' },
-    { id: 'rechazado', label: 'Rechazado', ico: 'x' }
+    { id: 'rechazado', label: 'Rechazado', ico: 'x' },
+    { id: 'nosum', label: 'No se suministró', ico: 'x' }   // v0.8: compras no lo consiguió
   ];
   const TODOS = [...EXTRA.slice(0, 1), ...EST, ...EXTRA.slice(1)];
   const estIdx = id => EST.findIndex(e => e.id === id);
@@ -143,7 +144,7 @@
   const compraEstado = c => (c.remision ? 'recibido' : c.pago ? 'pagado' : c.factura ? 'facturado' : 'cotizado');
   // Filtros del listado de compras (pueden coincidir: una compra recibida puede seguir por pagar)
   const FILTRO_EST = {
-    cotizado: c => !c.factura, facturado: c => c.factura && !c.pago, pagado: c => !!c.pago, recibido: c => !!c.remision,
+    cotizado: c => c.iva && !c.factura, facturado: c => !c.pago && (!!c.factura || !c.iva), pagado: c => !!c.pago, recibido: c => !!c.remision,
     dif: c => diferencias(c).length > 0
   };
   // Diferencias de montos o datos en una compra; se marcan en rojo (cuentan los centavos)
@@ -166,6 +167,7 @@
     if (r.estado === 'borrador') return 'borrador';
     if (p.aprobacion === 'rechazada') return 'rechazado';
     if (p.aprobacion !== 'aprobada') return 'requisitado';
+    if (p.suministro === 'no_suministrado') return 'nosum';
     const c = compra(p.compraId);
     return c ? compraEstado(c) : 'autorizado';
   }
@@ -177,7 +179,7 @@
   const montoCompra = c => (c.factura ? c.factura.total : c.cotizacion ? c.cotizacion.monto : 0);
   const montoReq = r => comprasDe(r).reduce((a, c) => a + montoCompra(c), 0);
   const seguros = s => s.pagado + s.recibido;
-  const vivos = (r, s) => r.partidas.length - s.rechazado; // materiales que siguen en el flujo
+  const vivos = (r, s) => r.partidas.length - s.rechazado - s.nosum; // materiales que siguen en el flujo
   function findPartida(pid) { for (const r of D.requisiciones) { const p = r.partidas.find(x => x.id === pid); if (p) return p; } return null; }
 
   // Liga con el directorio: por id (si se eligió del directorio) o por nombre
@@ -417,6 +419,7 @@
               <button class="btn" type="button" data-pdf>${I.print}<span>PDF</span></button>
               <button class="btn" type="button" data-xls>${I.vTabla}<span>Excel</span></button>
               ${editable ? `<button class="btn" type="button" data-edit>${I.edit}<span>Editar</span></button>` : ''}
+              ${esAdmin() ? `<button class="btn" type="button" data-mover title="Mover la requisición y sus compras a otra semana">${I.left}<span>Mover de semana</span></button>` : ''}
               ${!editable && esAdmin() && ['enviada', 'revisada'].includes(r.estado) ? `<button class="btn" type="button" data-corregir title="Corrección del admin técnico: queda en la bitácora">${I.edit}<span>Corregir</span></button>` : ''}
               ${editable && r.estado === 'borrador' ? `<button class="ibtn ibtn--line" type="button" data-borrar title="Borrar borrador" aria-label="Borrar borrador">${I.trash}</button>` : ''}
               ${editable ? `<button class="btn btn--solid" type="button" data-enviar>${I.send}<span>${r.estado === 'devuelta' ? 'Reenviar' : 'Enviar'}</span></button>` : ''}
@@ -453,7 +456,7 @@
                 return `<tr class="row${p.aprobacion === 'rechazada' ? ' is-off' : ''}" data-pid="${esc(p.id)}">
                   ${sel ? `<td class="c-ck">${e === 'autorizado' ? `<input class="ck" type="checkbox" value="${esc(p.id)}" aria-label="Seleccionar ${esc(p.insumo)}">` : ''}</td>` : ''}
                   <td class="c-n">${i + 1}</td>
-                  <td class="ins"><b>${esc(p.insumo)}</b>${p.observaciones ? `<small>${esc(p.observaciones)}</small>` : ''}${p.aprobacion === 'rechazada' && p.motivoRechazo ? `<small class="rej">Rechazado: ${esc(p.motivoRechazo)}</small>` : ''}</td>
+                  <td class="ins"><b>${esc(p.insumo)}</b>${p.observaciones ? `<small>${esc(p.observaciones)}</small>` : ''}${p.aprobacion === 'rechazada' && p.motivoRechazo ? `<small class="rej">Rechazado: ${esc(p.motivoRechazo)}</small>` : ''}${sumNota(p)}</td>
                   <td class="c-q">${qty(p.cantidad)}</td>
                   <td>${esc(p.unidad)}</td>
                   <td class="small">${esc(p.destino) || '<span class="muted">—</span>'}</td>
@@ -474,6 +477,14 @@
         const on = (sel, fn) => { const b = $(sel, sec); if (b) b.addEventListener('click', fn); };
         on('[data-edit]', () => drReq(r));
         on('[data-corregir]', () => drReq(r, null, { correccion: true }));
+        on('[data-mover]', async () => {
+          const ncs = comprasDe(r).length;
+          const w = await pedirSemana(r, 'Mover de semana', `Se mueve <b>${esc(r.folio)}</b>${ncs ? ` con sus ${ncs} ${ncs === 1 ? 'compra' : 'compras'}` : ''}. El folio cambia a la nueva semana.`);
+          if (!w) return;
+          if (r.tipo === 'ordinaria' && D.requisiciones.some(x => x.id !== r.id && x.obraId === r.obraId && x.tipo === 'ordinaria' && x.anio === w.anio && x.semana === w.semana)) { toast('Esa semana ya tiene una requisición ordinaria de esta obra.'); return; }
+          let folio = '';
+          if (await hacer(async () => { folio = await R.moverRequisicion(r.id, w.anio, w.semana); }, '')) { toast(`Movida a la semana ${w.semana}: ${folio}.`); UI.wk = { anio: w.anio, semana: w.semana }; saveUI(); api.rerender(); }
+        });
         on('[data-enviar]', async () => {
           if (!(await api.confirmar({ titulo: r.estado === 'devuelta' ? 'Reenviar requisición' : 'Enviar requisición', texto: `Se enviará <b>${esc(r.folio)}</b> con ${n} materiales al coordinador de obra, con aviso por correo. Después ya no podrás modificarla; lo que falte irá en una extraordinaria.`, ok: 'Enviar' }))) return;
           if (await hacer(() => R.cambiarEstado(r.id, 'enviada'), 'Requisición enviada. Avisando al coordinador por correo…')) { api.rerender(); avisar(r.id, 'enviada'); }
@@ -515,6 +526,23 @@
         }));
       }
     };
+  }
+
+  // v0.8: lo que marcó compras sobre el suministro de un material (lo ve también el residente)
+  const sumNota = p => p.suministro === 'sustituido'
+    ? `<small class="sust">Se cambió por: <b>${esc(p.sustituto)}</b>${p.notaSuministro ? ' · ' + esc(p.notaSuministro) : ''}</small>`
+    : p.suministro === 'no_suministrado' ? `<small class="rej">No se pudo suministrar${p.notaSuministro ? ': ' + esc(p.notaSuministro) : ''}</small>` : '';
+  // Pide año y semana (por defecto, la semana anterior)
+  async function pedirSemana(x, titulo, texto) {
+    const prev = wkAdd({ anio: x.anio, semana: x.semana }, -1);
+    const v = await api.preguntar({ titulo, texto: texto + ` Ahora está en la semana <b>${x.semana}</b> de ${x.anio}.`, etiqueta: 'Nueva semana (1 a 53)', campo: 'numero', valor: String(prev.semana), ok: 'Mover', requerido: true });
+    if (v == null) return null;
+    const n = parseInt(v, 10);
+    if (!(n >= 1 && n <= 53)) { toast('Escribe una semana del 1 al 53.'); return null; }
+    if (n === x.semana) return null;
+    // si pasa de la semana 1 a la 52/53 se entiende del año anterior (y al revés)
+    const anio = n - x.semana > 26 ? x.anio - 1 : x.semana - n > 26 ? x.anio + 1 : x.anio;
+    return { anio, semana: n };
   }
 
   // Correo automático de la requisición; si falla, el cambio de estado ya quedó guardado
@@ -623,7 +651,7 @@
   }
 
   const docsDe = c => [
-    ['Cotización', !!c.cotizacion], ['Factura', !!(c.factura && c.factura.pdfArchivo)], ['XML', !!(c.factura && c.factura.xmlArchivo)],
+    ['Cotización', !!c.cotizacion], ...(c.iva ? [['Factura', !!(c.factura && c.factura.pdfArchivo)], ['XML', !!(c.factura && c.factura.xmlArchivo)]] : []),
     ['Pago', !!c.pago], ['Remisión', !!c.remision]
   ];
   function ccard(c, d) {
@@ -643,7 +671,7 @@
         ${difs.length ? `<p class="dif-l">${I.alert}<span>${esc(difs[0].txt)}${difs.length > 1 ? ` <b>(+${difs.length - 1} más)</b>` : ''}</span></p>` : ''}
         <span class="muted small">${r ? 'Requisición ' + esc(r.folio) + ' · ' : ''}${c.partidas.length} materiales · entrega ${esc(fDate(c.fechaEntrega))}</span>
       </div>
-      <div class="c-total"><b>${money(montoCompra(c))}</b>${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
+      <div class="c-total"><b>${money(montoCompra(c))}</b>${c.iva ? '' : '<span class="tagx tagx--siniva">Sin IVA</span>'}${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
     </article>`;
   }
 
@@ -728,7 +756,7 @@
       ? `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}" title="Abrir ${esc(a.nombre)}">${I[icon]}<span>${esc(a.nombre)}</span><em>${tipo}</em></button>`
       : '';
     // Se pueden subir en cualquier orden; se resalta el primero que falta
-    const next = !c.cotizacion ? 1 : !f ? 2 : !c.pago ? 3 : !c.remision ? 4 : 0;
+    const next = !c.cotizacion ? 1 : !f && c.iva ? 2 : !c.pago ? 3 : !c.remision ? 4 : 0;
     const difs = diferencias(c), difEn = new Set(difs.map(x => x.doc));
     const res = o.residente || {};
     const recibida = !!c.remision;
@@ -765,11 +793,16 @@
         </header>
 
         ${difs.length ? `<div class="note note--bad rv" style="--d:50" role="alert">${I.alert}<p><b>${difs.length === 1 ? 'Hay una diferencia' : 'Hay ' + difs.length + ' diferencias'} en esta compra.</b> Revísala con el proveedor antes de pagar o archivar.<br>${difs.map(x => esc(x.txt)).join('<br>')}</p></div>` : ''}
+        ${esCompras() || esAdmin() ? `<div class="c-acts rv" style="--d:40">
+          ${esCompras() ? `<div class="seg" role="group" aria-label="IVA de la compra"><button type="button" data-iva="1" aria-pressed="${c.iva}">Con IVA</button><button type="button" data-iva="0" aria-pressed="${!c.iva}">Sin IVA</button></div>` : ''}
+          ${esAdmin() ? `<button class="tbtn tbtn--sm" type="button" data-mover-c>${I.left}<span>Mover de semana</span></button>
+            <button class="tbtn tbtn--sm c-borrar" type="button" data-borrar-c>${I.trash}<span>Borrar compra</span></button>` : ''}
+        </div>` : ''}
         <div class="docs">
           ${doc(1, 'Cotización elegida', 'La que se va a pagar', c.cotizacion,
             c.cotizacion ? `<div class="files">${archivosDe(c.cotizacion, 'file', 'PDF')}</div><p class="dmeta"><b>${money(c.cotizacion.monto)}</b> · ${esc(fDate(c.cotizacion.fecha))} · ${esc(c.cotizacion.subidoPor)}</p>` : '',
             !c.cotizacion ? (esCompras() ? drop('cot', 'Subir cotización (PDF)') : lock('Compras sube la cotización.')) : '', 'cotizacion')}
-          ${doc(2, 'Factura y XML', 'Los datos se leen del XML', f,
+          ${!c.iva && !f ? `<div class="doc doc--siniva rv" style="--d:140"><div class="doc-h"><span class="doc-n">–</span><div><h3>Sin factura</h3><small>Compra sin IVA</small></div></div><p class="dmeta">Las compras sin IVA no llevan factura ni XML. Se controla con la cotización y el comprobante de pago.</p></div>` : doc(2, 'Factura y XML', 'Los datos se leen del XML', f,
             f ? `<div class="files">${fch('file', f.pdfArchivo, 'PDF') || sinArch('Falta el PDF')}${fch('xml', f.xmlArchivo, 'XML')}</div>
               <p class="dmeta">Folio <b>${esc((f.serie || '') + ' ' + f.folio)}</b> · ${esc(fDate(f.fecha))}${f.uuid ? `<br>UUID <span class="mono">${esc(f.uuid.slice(0, 8))}…</span>` : ''}</p>` : '',
             !f ? (esCompras() ? drop('xml', 'Subir XML y PDF', 'xml') : lock('Compras sube la factura.')) : '', 'factura')}
@@ -846,6 +879,22 @@
           b.addEventListener('drop', ev => { ev.preventDefault(); b.classList.remove('over'); const fl = ev.dataTransfer.files[0]; if (fl) recibirArchivo(c.id, k, fl); });
         });
         $$('[data-ruta]', sec).forEach(b => b.addEventListener('click', () => abrirArchivo(b.dataset.ruta)));
+        $$('[data-iva]', sec).forEach(b => b.addEventListener('click', async () => {
+          const v = b.dataset.iva === '1';
+          if (v === c.iva) return;
+          if (!v && f && !(await api.confirmar({ titulo: 'Compra sin IVA', texto: 'Esta compra ya tiene factura. Al marcarla sin IVA la factura se conserva, pero ya no se pide.', ok: 'Marcar sin IVA' }))) return;
+          if (await hacer(() => R.actualizarCompra(c.id, { iva: v }), v ? 'Compra con IVA: lleva factura y XML.' : 'Compra sin IVA: no lleva factura ni XML.')) api.rerender();
+        }));
+        const mc = $('[data-mover-c]', sec);
+        if (mc) mc.addEventListener('click', async () => {
+          const w = await pedirSemana(c, 'Mover compra de semana', 'Solo se mueve esta compra; su requisición se queda en su semana.');
+          if (w && await hacer(() => R.actualizarCompra(c.id, w), `Compra movida a la semana ${w.semana}.`)) api.rerender();
+        });
+        const bc = $('[data-borrar-c]', sec);
+        if (bc) bc.addEventListener('click', async () => {
+          if (!(await api.confirmar({ titulo: 'Borrar compra', texto: `Se borrará la compra de <b>${esc(c.proveedor.nombre)}</b> con todos sus documentos y archivos. Sus materiales regresan a "Autorizado" en la requisición. No se puede deshacer.`, ok: 'Borrar compra', peligro: true }))) return;
+          if (await hacer(() => R.borrarCompra(c.id), 'Compra borrada.')) location.hash = r ? '#/r/' + r.id : '#/compras';
+        });
         $$('[data-quitar]', sec).forEach(b => b.addEventListener('click', async () => {
           const t = { cotizacion: 'la cotización', factura: 'la factura (PDF y XML)', pago: 'el comprobante de pago', remision: 'la remisión' }[b.dataset.tipo];
           if (!(await api.confirmar({ titulo: 'Quitar documento', texto: `Se borrará ${t} de esta compra, con sus archivos. Úsalo solo para corregir un error.`, ok: 'Quitar', peligro: true }))) return;
@@ -1122,12 +1171,14 @@
     ];
     // Los documentos de la compra se suben en cualquier orden: cada paso cuenta por sí solo
     const hechos = pasos.map(([, hecho], i) => (i < 2 ? i <= k : !!hecho));
+    const puedeSum = esCompras() && r.estado === 'revisada' && p.aprobacion === 'aprobada';
     const sig = hechos.indexOf(false);
     api.openPanel(`<div class="dr-form">
       ${drHead(`${esc(r.folio)} · material ${r.partidas.indexOf(p) + 1}`, esc(p.insumo))}
       <div class="dr-b">
         <section class="fs"><div class="fs-b">
           <div class="m-head"><span class="lead-s">${qty(p.cantidad)} ${esc(p.unidad)}</span>${st(e)}</div>
+          ${sumNota(p) ? `<p class="sum-nota">${sumNota(p)}</p>` : ''}
           ${e === 'rechazado' ? `<p class="warn">${I.alert}<span>Rechazado por ${esc(p.revisadaPor || 'el coordinador')}${p.motivoRechazo ? ': ' + esc(p.motivoRechazo) : ''}</span></p>` : ''}
           <dl class="dl">
             ${p.observaciones ? `<div><dt>Observaciones</dt><dd>${esc(p.observaciones)}</dd></div>` : ''}
@@ -1136,12 +1187,34 @@
             <div><dt>Proveedor</dt><dd>${c ? `<a class="link-u" href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>` : '—'}</dd></div>
           </dl>
         </div></section>
-        ${e === 'borrador' || e === 'rechazado' ? '' : `<section class="fs"><div class="fs-b">
+        ${e === 'borrador' || e === 'rechazado' || e === 'nosum' ? '' : `<section class="fs"><div class="fs-b">
           <ol class="tl">${pasos.map(([t, hecho, pend], i) => `<li class="${hechos[i] ? 'done' : i === sig ? 'now' : ''}"><span class="dot">${I[EST[i].ico]}</span><div><h4>${t}</h4><p>${esc(hechos[i] ? hecho : pend)}</p></div></li>`).join('')}</ol>
         </div></section>`}
       </div>
+      ${puedeSum ? `<fieldset class="fs"><legend class="sum-l">Suministro (compras)</legend><div class="fs-b sum-acts">
+          ${p.suministro !== 'normal' ? `<button class="btn" type="button" data-sum="normal">${I.undo}<span>Regresar al material original</span></button>` : ''}
+          <button class="btn" type="button" data-sum="sustituido">${I.edit}<span>${p.suministro === 'sustituido' ? 'Cambiar el sustituto' : 'Cambiar por otro similar'}</span></button>
+          ${p.suministro !== 'no_suministrado' ? `<button class="btn btn--danger" type="button" data-sum="no_suministrado">${I.close}<span>No se pudo suministrar</span></button>` : ''}
+        </div></fieldset>` : ''}
       <footer class="dr-f">${c ? `<a class="btn btn--solid" href="#/c/${esc(c.id)}">${I.receipt}<span>Ver la compra</span></a>` : '<button class="btn" type="button" data-close><span>Cerrar</span></button>'}</footer>
-    </div>`);
+    </div>`, {}, panel => {
+      $$('[data-sum]', panel).forEach(b => b.addEventListener('click', async () => {
+        const v = b.dataset.sum;
+        let sus = '', nota = '';
+        if (v === 'sustituido') {
+          sus = await api.preguntar({ titulo: 'Cambiar por otro material', texto: `<b>${esc(p.insumo)}</b> · ${qty(p.cantidad)} ${esc(p.unidad)}`, etiqueta: '¿Qué material se consiguió en su lugar?', valor: p.sustituto, ok: 'Guardar', requerido: true });
+          if (sus == null) return;
+          nota = await api.preguntar({ titulo: 'Nota para el residente (opcional)', etiqueta: 'Por qué se cambió', valor: p.notaSuministro, ok: 'Guardar' });
+          if (nota == null) nota = '';
+        } else if (v === 'no_suministrado') {
+          nota = await api.preguntar({ titulo: 'No se pudo suministrar', texto: `<b>${esc(p.insumo)}</b> · ${qty(p.cantidad)} ${esc(p.unidad)}`, etiqueta: 'Motivo (lo verá el residente)', campo: 'area', ok: 'Marcar', requerido: true, peligro: true });
+          if (nota == null) return;
+        }
+        if (await hacer(() => R.marcarSuministro(p.id, v, sus.trim().toUpperCase(), nota), v === 'normal' ? 'El material regresó al original.' : v === 'sustituido' ? 'Material cambiado: el residente lo verá.' : 'Marcado como no suministrado: el residente lo verá.')) {
+          api.closeDrawer(true); api.rerender();
+        }
+      }));
+    });
   }
 
   /* ---------- Nueva requisición / editar (se guarda como borrador o se envía) ---------- */
@@ -1173,15 +1246,13 @@
       <input class="in" name="cantidad" type="number" min="0" step="any" placeholder="0" value="${esc(p.cantidad)}" aria-label="Cantidad">
       <input class="in" name="obs" placeholder="Presentación, color…" value="${esc(p.observaciones)}" aria-label="Observaciones">
       <input class="in" name="destino" placeholder="¿Dónde se empleará?" value="${esc(p.destino)}" aria-label="¿Dónde se empleará?">
-      ${correccion && p.compraId
-        ? `<button class="ibtn" type="button" disabled title="Ya está en una compra: no se puede quitar" aria-label="Ya está en una compra">${I.receipt}</button>`
-        : `<button class="ibtn" type="button" data-del aria-label="Quitar renglón">${I.trash}</button>`}
+      <button class="ibtn" type="button" data-del aria-label="Quitar renglón"${p.compraId ? ' data-en-compra title="Ya está en una compra: al quitarlo sale también de la compra"' : ''}>${I.trash}</button>
     </div>`;
     const reenviar = r && r.estado === 'devuelta' && !correccion;
     api.openPanel(`<form class="dr-form" novalidate>
       ${drHead(nueva ? 'Requisición de materiales' : esc(r.folio), nueva ? 'Nueva requisición' : correccion ? 'Corregir requisición' : 'Editar requisición')}
       <div class="dr-b">
-        ${correccion ? `<div class="note note--info"><span>${I.shield}</span><p><b>Corrección del admin técnico.</b> La requisición conserva su estado. Lo que agregues queda aprobado; lo que cambies conserva su aprobación. Los materiales que ya están en una compra no se pueden quitar. Todo queda en la bitácora.</p></div>` : ''}
+        ${correccion ? `<div class="note note--info"><span>${I.shield}</span><p><b>Corrección del admin técnico.</b> La requisición conserva su estado. Lo que agregues queda aprobado; lo que cambies conserva su aprobación. Si quitas un material que ya está en una compra, sale también de esa compra. Todo queda en la bitácora.</p></div>` : ''}
         ${reenviar ? `<div class="note"><span>${I.alert}</span><p><b>Corrección pedida:</b> ${esc(r.comentarioRevision || '—')}. Los materiales que cambies vuelven a revisión; los demás conservan su aprobación.</p></div>` : ''}
         <fieldset class="fs"><legend><span class="mono">1</span>Obra y semana</legend><div class="fs-b"><div class="grid3">
           <label class="fld"><span class="fld-l">Obra</span><select class="in" name="obra"${nueva && obras.length > 1 ? '' : ' disabled'}>${obras.map(o => `<option value="${esc(o.id)}"${o.id === oSel ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>

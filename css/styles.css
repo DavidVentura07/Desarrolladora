@@ -1421,12 +1421,12 @@ body[data-rol="direccion"] .solo-jefes, body[data-rol="admin"] .solo-jefes { dis
    ========================================================= */
 /* Barra lateral: más compacta para que quepan los 5 módulos de "Muy pronto" a 800 px de alto */
 .side-app { margin-bottom: 16px; }
-.side-nav a { height: 40px; white-space: nowrap; }
+.side-nav a { height: 37px; white-space: nowrap; }   /* v0.8: 37 px para que quepa Bitácora a 1280×800 */
 .side-nav a > span:first-child, .side-soon i { flex: none; display: grid; }
 .side-sep { display: block; height: 1px; margin: 6px 14px; background: var(--line); }
-.side-soon { margin-top: 14px; gap: 0; }
+.side-soon { margin-top: 12px; gap: 0; }
 .side-soon p { margin-bottom: 2px; }
-.side-soon span { height: 27px; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-soon span { height: 24px; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-soon span .ico { width: 18px; height: 18px; }
 .side-foot { padding-top: 14px; gap: 8px; }
 .side .backup { padding: 10px 14px; }
@@ -1573,3 +1573,26 @@ body.welcome-open { overflow: hidden; }
 .res-hist li span { color: var(--muted); font-weight: 600; }
 .r-aviso { display: inline-flex; align-items: center; gap: 6px; }
 .r-aviso .ico { width: 15px; height: 15px; color: var(--ok); }
+
+/* v0.8 · Sin IVA, suministro (sustituto / no suministrado), acciones del admin en compras */
+.st--nosum { color: var(--bad); background: var(--bad-bg); }
+.sbar .b-nosum, .slegend .b-nosum { background: #C9727A; }
+.rtbl .ins small.sust { color: var(--warn); }
+.sum-nota { margin: 0; font-size: 13px; }
+.sum-nota small { display: block; font-weight: 650; }
+.sum-nota .sust { color: var(--warn); }
+.sum-nota .rej { color: var(--bad); }
+.sum-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.tagx--siniva { background: var(--sun-bg); color: var(--sun-deep); }
+.doc--siniva { background: transparent; border: 1.5px dashed var(--line-2); }
+.c-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+.c-borrar { color: var(--bad); }
+.c-borrar:hover { background: var(--bad-bg); }
+/* Bitácora */
+.bit-cambios { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.bit-cambios span { color: var(--muted); }
+.bit-cambios b { color: var(--ink); font-weight: 700; }
+.bit-acc { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11.5px; font-weight: 750; background: var(--bg); color: var(--ink-2); }
+.bit-acc.insert { background: var(--ok-bg); color: var(--ok); }
+.bit-acc.delete { background: var(--bad-bg); color: var(--bad); }
+.bit-acc.update { background: var(--lav); color: var(--navy); }

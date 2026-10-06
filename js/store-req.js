@@ -53,7 +53,10 @@
     id: p.id, orden: p.orden || 0, insumo: str(p.insumo), unidad: str(p.unidad), cantidad: num(p.cantidad),
     observaciones: str(p.observaciones), destino: str(p.destino), fechaSuministro: fecha(p.fecha_suministro),
     aprobacion: p.aprobacion || 'pendiente', motivoRechazo: str(p.motivo_rechazo),
-    revisadaPor: quien(p.revisada_por), revisadaEn: p.revisada_en || '', compraId: ''
+    revisadaPor: quien(p.revisada_por), revisadaEn: p.revisada_en || '', compraId: '',
+    // v0.8: compras lo cambió por otro similar o no se pudo suministrar
+    suministro: p.suministro || 'normal', sustituto: str(p.sustituto), notaSuministro: str(p.nota_suministro),
+    suministroPor: quien(p.suministro_por), suministroEn: p.suministro_en || ''
   });
 
   const deRequisicion = r => ({
@@ -98,6 +101,7 @@
     const prov = obj(c.proveedor);
     return {
       id: c.id, obraId: c.obra_id, anio: c.anio, semana: c.semana, requisicionId: '',
+      iva: c.iva !== false,   // v0.8: sin IVA no lleva factura ni XML
       proveedor: { nombre: str(prov.nombre), rfc: str(prov.rfc).toUpperCase(), razonSocial: str(prov.razonSocial), id: c.proveedor_id || '' },
       partidas: arr(c.compra_partidas).map(x => x.partida_id),
       fechaEntrega: fecha(c.fecha_entrega), entregas: obj(c.entregas), notas: str(c.notas),
@@ -256,6 +260,21 @@
       const filas = ok(await sb().from('requisiciones').delete().eq('id', id).select('id'));
       if (!filas.length) throw new Error('Solo se pueden borrar requisiciones en borrador.');
     },
+    // v0.8: compras marca un material como cambiado por otro o no suministrado (o lo regresa a normal)
+    async marcarSuministro(id, suministro, sustituto, nota) {
+      const filas = ok(await sb().from('partidas').update({ suministro, sustituto: str(sustituto), nota_suministro: str(nota) }).eq('id', id).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede marcar el suministro de este material.');
+    },
+    // v0.8: el admin mueve una requisición (y sus compras) a otra semana; el folio cambia de semana
+    async moverRequisicion(id, anio, semana) {
+      const r = find('requisiciones', id);
+      if (!r) throw new Error('No se encontró la requisición.');
+      const folio = r.folio.replace(/-S\d+/, '-S' + semana);
+      ok(await sb().from('requisiciones').update({ anio, semana, folio }).eq('id', id).select('id'));
+      const cs = db.compras.filter(c => c.requisicionId === id).map(c => c.id);
+      if (cs.length) ok(await sb().from('compras').update({ anio, semana }).in('id', cs).select('id'));
+      return folio;
+    },
     async revisarPartida(id, aprobacion, motivo) {
       const filas = ok(await sb().from('partidas').update({ aprobacion, motivo_rechazo: aprobacion === 'rechazada' ? str(motivo) : '' }).eq('id', id).select('id'));
       if (!filas.length) throw new Error('No tienes permiso para revisar este material.');
@@ -281,6 +300,8 @@
       const f = {};
       if ('fechaEntrega' in patch) f.fecha_entrega = patch.fechaEntrega || null;
       if ('entregas' in patch) f.entregas = patch.entregas;
+      if ('iva' in patch) f.iva = !!patch.iva;
+      if ('semana' in patch) { f.anio = patch.anio; f.semana = patch.semana; }
       if ('proveedor' in patch) f.proveedor = { nombre: str(patch.proveedor.nombre), rfc: str(patch.proveedor.rfc), razonSocial: str(patch.proveedor.razonSocial) };
       const filas = ok(await sb().from('compras').update(f).eq('id', id).select('id'));
       if (!filas.length) throw new Error('Tu rol no puede modificar esta compra.');
