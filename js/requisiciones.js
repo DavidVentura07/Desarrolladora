@@ -106,7 +106,8 @@
   const EXTRA = [
     { id: 'borrador', label: 'Borrador', ico: 'draft' },
     { id: 'rechazado', label: 'Rechazado', ico: 'x' },
-    { id: 'nosum', label: 'No se suministró', ico: 'x' }   // v0.8: compras no lo consiguió
+    { id: 'nosum', label: 'No se suministró', ico: 'x' },   // v0.8: compras no lo consiguió
+    { id: 'caja', label: 'Caja chica', ico: 'cash' }        // v0.9: lo compra el residente en obra
   ];
   const TODOS = [...EXTRA.slice(0, 1), ...EST, ...EXTRA.slice(1)];
   const estIdx = id => EST.findIndex(e => e.id === id);
@@ -168,6 +169,7 @@
     if (p.aprobacion === 'rechazada') return 'rechazado';
     if (p.aprobacion !== 'aprobada') return 'requisitado';
     if (p.suministro === 'no_suministrado') return 'nosum';
+    if (p.cajaId) return 'caja';
     const c = compra(p.compraId);
     return c ? compraEstado(c) : 'autorizado';
   }
@@ -456,7 +458,7 @@
                 return `<tr class="row${p.aprobacion === 'rechazada' ? ' is-off' : ''}" data-pid="${esc(p.id)}">
                   ${sel ? `<td class="c-ck">${e === 'autorizado' ? `<input class="ck" type="checkbox" value="${esc(p.id)}" aria-label="Seleccionar ${esc(p.insumo)}">` : ''}</td>` : ''}
                   <td class="c-n">${i + 1}</td>
-                  <td class="ins"><b>${esc(p.insumo)}</b>${p.observaciones ? `<small>${esc(p.observaciones)}</small>` : ''}${p.aprobacion === 'rechazada' && p.motivoRechazo ? `<small class="rej">Rechazado: ${esc(p.motivoRechazo)}</small>` : ''}${sumNota(p)}</td>
+                  <td class="ins"><b>${esc(p.insumo)}</b>${p.observaciones ? `<small>${esc(p.observaciones)}</small>` : ''}${p.aprobacion === 'rechazada' && p.motivoRechazo ? `<small class="rej">Rechazado: ${esc(p.motivoRechazo)}</small>` : ''}${sumNota(p)}${cajaNota(p)}</td>
                   <td class="c-q">${qty(p.cantidad)}</td>
                   <td>${esc(p.unidad)}</td>
                   <td class="small">${esc(p.destino) || '<span class="muted">—</span>'}</td>
@@ -469,7 +471,7 @@
             </div>
           </div>
         </section>
-        <div class="selbar" hidden><span><b data-nsel>0</b> materiales seleccionados</span><button class="btn btn--solid" type="button" data-cot>${I.file}<span>Registrar cotización elegida</span></button></div>
+        <div class="selbar" hidden><span><b data-nsel>0</b> materiales seleccionados</span><button class="btn" type="button" data-a-caja>${I.cash}<span>Mandar a caja chica</span></button><button class="btn btn--solid" type="button" data-cot>${I.file}<span>Registrar cotización elegida</span></button></div>
       </section>`,
       bind(sec) {
         $('[data-pdf]', sec).addEventListener('click', () => imprimir(r));
@@ -520,6 +522,11 @@
         const upd = () => { const k = $$('.ck:checked', sec).length; bar.hidden = !k; $('[data-nsel]', sec).textContent = k; };
         $$('.ck', sec).forEach(c => c.addEventListener('change', upd));
         $('[data-cot]', sec).addEventListener('click', () => drCotizacion(r, $$('.ck:checked', sec).map(c => c.value)));
+        $('[data-a-caja]', sec).addEventListener('click', async () => {
+          const ids = $$('.ck:checked', sec).map(c => c.value);
+          if (!(await api.confirmar({ titulo: 'Mandar a caja chica', texto: `${ids.length} ${ids.length === 1 ? 'material lo comprará' : 'materiales los comprará'} el residente en obra con caja chica. Le aparecerán en <b>Caja chica</b> para subir su nota; no pasan por cotización ni factura.`, ok: 'Mandar a caja chica' }))) return;
+          if (await hacer(() => R.mandarACaja(ids), 'Enviado a caja chica.')) api.rerender();
+        });
         $$('tr[data-pid]', sec).forEach(tr => tr.addEventListener('click', e => {
           if (e.target.closest('a, input, button')) return;
           drMaterial(r, r.partidas.find(p => p.id === tr.dataset.pid));
@@ -1407,6 +1414,7 @@
           <label class="fld"><span class="fld-l">Clave para folios</span><input class="in" name="clave" value="${esc(x.clave)}" maxlength="8" placeholder="EC469"${dis}><span class="fld-h">Los folios quedan como EC469-S40.</span></label>
           <label class="fld"><span class="fld-l">Estatus</span><select class="in" name="estatus"${dis}><option value="activa"${x.estatus !== 'cerrada' ? ' selected' : ''}>Activa</option><option value="cerrada"${x.estatus === 'cerrada' ? ' selected' : ''}>Cerrada</option></select></label>
           <label class="fld fld--wide"><span class="fld-l">Dirección</span><input class="in" name="direccion" value="${esc(x.direccion)}"${dis}></label>
+          <label class="fld"><span class="fld-l">Fondo fijo de caja chica</span><input class="in" name="fondo" type="number" min="0" step="0.01" value="${x.fondoCaja == null ? '' : esc(x.fondoCaja)}" placeholder="Sin fondo"${dis}><span class="fld-h">Opcional. Vacío = el residente paga y se le reembolsa.</span></label>
         </div></div></fieldset>
         ${nueva ? '' : `<fieldset class="fs"><legend><span class="mono">2</span>Residente de obra</legend><div class="fs-b">
           <div class="res-now"><span class="p-av">${esc(api.iniciales(x.residente.nombre))}</span><div><b>${esc(x.residente.nombre || 'Sin residente')}</b><small>Titular${(() => { const v = x.historial.find(hh => !hh.hasta); return v ? ' desde el ' + esc(fDate(v.desde)) : ''; })()}</small></div>
@@ -1455,7 +1463,7 @@
         const anterior = o ? o.nombre : '';
         ocupado(panel, true, 'Guardando…');
         try {
-          await R.guardarObra({ id: o ? o.id : '', nombre, clave: f.clave.value.trim().replace(/\s+/g, ''), direccion: f.direccion.value.trim(), estatus: f.estatus.value, residenteId: nueva ? f.residente.value : x.residenteId });
+          await R.guardarObra({ id: o ? o.id : '', nombre, clave: f.clave.value.trim().replace(/\s+/g, ''), direccion: f.direccion.value.trim(), estatus: f.estatus.value, residenteId: nueva ? f.residente.value : x.residenteId, fondoCaja: f.fondo.value });
         } catch (x2) { ocupado(panel, false, 'Guardar'); err().textContent = x2.message; return; }
         await syncListaObras(anterior, nombre);
         await cargar();
@@ -1505,6 +1513,183 @@
         api.closeDrawer(true);
         toast('Residente cambiado. Queda en el historial de la obra.');
         api.rerender();
+      });
+    });
+  }
+
+  /* =========================================================
+     CAJA CHICA (v0.9)
+     ========================================================= */
+  const KEST = {
+    por_comprar: { label: 'Por comprar', cls: 'wait' }, por_aprobar: { label: 'Por aprobar', cls: 'ext' }, rechazado: { label: 'Rechazado', cls: 'bad' },
+    por_verificar: { label: 'Por verificar', cls: 'wait' }, verificado: { label: 'Verificado', cls: 'ok' }, reembolsado: { label: 'Reembolsado', cls: 'ok' }
+  };
+  const kTag = k => `<span class="tagx tagx--${KEST[k.estado].cls}">${esc(KEST[k.estado].label)}</span>`;
+  const caja = id => D.caja.find(k => k.id === id);
+  const cajaNota = p => { const k = p.cajaId && caja(p.cajaId); return k ? `<small class="sust">Caja chica · ${esc(KEST[k.estado].label.toLowerCase())}${k.monto ? ' · ' + money(k.monto) : ''}</small>` : ''; };
+  const cuenta = k => ['por_aprobar', 'por_verificar', 'verificado'].includes(k.estado);   // gasto hecho aún no reembolsado
+  const KFILTROS = [['todos', 'Todos'], ['por_comprar', 'Por comprar'], ['por_aprobar', 'Por aprobar'], ['por_verificar', 'Por verificar'], ['verificado', 'Verificados'], ['reembolsado', 'Reembolsados']];
+
+  async function pageCaja() {
+    await api.refresh(); await cargar();
+    if (!obrasMias().length) return sinDatos('Caja chica');
+    // compras no ve gastos directos que el coordinador no ha aprobado (la base tampoco se los manda)
+    const vis = D.caja.filter(k => visibleObra(k.obraId) && (!UI.kObra || k.obraId === UI.kObra)
+      && !(rol() === 'compras' && k.origen === 'directo' && ['por_aprobar', 'rechazado'].includes(k.estado)));
+    const lista = vis.filter(k => !UI.kEst || UI.kEst === 'todos' || k.estado === UI.kEst);
+    const hw = hoyWk();
+    const semana = vis.filter(k => wkKey(k) === wkKey(hw) && cuenta(k) || (wkKey(k) === wkKey(hw) && k.estado === 'reembolsado'));
+    const n = e => vis.filter(k => k.estado === e).length;
+    const fondos = obrasMias().filter(o => o.fondoCaja != null && (!UI.kObra || o.id === UI.kObra));
+    const porWk = {};
+    lista.forEach(k => { const w = wkKey(k); ((porWk[w] = porWk[w] || {})[k.obraId] = porWk[w][k.obraId] || []).push(k); });
+    let di = 0;
+    const grupos = Object.keys(porWk).sort((a, b) => b - a).map(wk => {
+      const w = { anio: Math.floor(wk / 100), semana: wk % 100 };
+      return Object.keys(porWk[wk]).map(oid => {
+        const ks = porWk[wk][oid], o = obra(oid) || {};
+        const tot = ks.filter(k => k.estado !== 'rechazado' && k.estado !== 'por_comprar').reduce((a, k) => a + k.monto, 0);
+        const verif = ks.filter(k => k.estado === 'verificado');
+        return `<section class="ogroup">
+          <div class="ogroup-h rv" style="--d:${Math.min(di++ * 40, 400)}"><div><h2>${esc(o.nombre || 'Obra')} · semana ${w.semana}</h2><p class="sub">${esc(wkRange(w))} · ${ks.length} ${ks.length === 1 ? 'gasto' : 'gastos'} · ${money(tot)}</p></div>
+            ${esCompras() && verif.length ? `<button class="btn btn--sm" type="button" data-reemb="${esc(verif.map(k => k.id).join(','))}">${I.check}<span>Marcar reembolsado · ${money(verif.reduce((a, k) => a + k.monto, 0))}</span></button>` : ''}</div>
+          <div class="klist">${ks.map(k => kItem(k, Math.min(di++ * 30, 500))).join('')}</div>
+        </section>`;
+      }).join('');
+    }).join('');
+    return {
+      title: 'Caja chica',
+      html: `<section class="page">
+        <section class="hero">
+          <div class="hero-main rv" style="--d:0">
+            <div class="deco">${api.markSVG()}</div>
+            <div><p class="h-eyebrow">Lo que el residente compra en obra con su nota</p><h1>Caja<br>chica</h1></div>
+            <p class="h-sum"><span class="h-count">Esta semana: <b class="h-money">${money(semana.reduce((a, k) => a + k.monto, 0))}</b></span><span class="pill">${n('por_comprar')} por comprar</span></p>
+          </div>
+          <div class="sqs-h">
+            <div class="sq sq--sun rv" style="--d:80"><p>Por aprobar<br>(coordinador)</p><div class="sq-row"><strong>${n('por_aprobar')}</strong><button class="sq-go" type="button" data-kest-go="por_aprobar" aria-label="Ver por aprobar">${I.arrow}</button></div></div>
+            <div class="sq rv" style="--d:140"><p>Por verificar<br>(compras)</p><div class="sq-row"><strong>${n('por_verificar')}</strong><button class="sq-go" type="button" data-kest-go="por_verificar" aria-label="Ver por verificar">${I.arrow}</button></div></div>
+          </div>
+        </section>
+        ${fondos.map(o => { const usado = D.caja.filter(k => k.obraId === o.id && cuenta(k)).reduce((a, k) => a + k.monto, 0), disp = o.fondoCaja - usado;
+          return `<div class="note${disp < 0 ? ' note--bad' : ' note--info'} rv" style="--d:100">${I.cash}<p><b>Fondo de ${esc(o.nombre)}:</b> ${money(o.fondoCaja)} · usado sin reembolsar ${money(usado)} · <b>disponible ${money(disp)}</b>${disp < 0 ? ' (se pasó del fondo)' : ''}</p></div>`; }).join('')}
+        <div class="filterbar rv" style="--d:140">
+          <div class="seg" role="group" aria-label="Estado">${KFILTROS.map(([k, l]) => `<button type="button" data-kest="${k}" aria-pressed="${(UI.kEst || 'todos') === k}">${l}</button>`).join('')}</div>
+          ${obrasMias().length > 1 ? `<span class="fb-sep"></span><label class="psel${UI.kObra ? ' on' : ''}"><span class="sr">Obra</span><select data-kobra><option value="">Obra: todas</option>${obrasMias().map(o => `<option value="${esc(o.id)}"${UI.kObra === o.id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>` : ''}
+        </div>
+        ${grupos || `<div class="empty empty--sm"><p class="h3">${vis.length ? 'Nada con este filtro' : 'Todavía no hay gastos de caja chica'}</p><p class="muted small">Compras manda materiales de una requisición revisada a caja chica, o el residente agrega un gasto con <b>Agregar gasto</b>.</p></div>`}
+      </section>`,
+      bind(sec) {
+        $$('[data-kest]', sec).forEach(b => b.addEventListener('click', () => { UI.kEst = b.dataset.kest; saveUI(); api.rerender(); }));
+        $$('[data-kest-go]', sec).forEach(b => b.addEventListener('click', () => { UI.kEst = b.dataset.kestGo; saveUI(); api.rerender(); }));
+        const so = $('[data-kobra]', sec); if (so) so.addEventListener('change', () => { UI.kObra = so.value; saveUI(); api.rerender(); });
+        $$('[data-ruta]', sec).forEach(b => b.addEventListener('click', () => abrirArchivo(b.dataset.ruta)));
+        $$('[data-reemb]', sec).forEach(b => b.addEventListener('click', async () => {
+          const ids = b.dataset.reemb.split(',');
+          if (!(await api.confirmar({ titulo: 'Marcar como reembolsado', texto: `${ids.length} ${ids.length === 1 ? 'gasto verificado' : 'gastos verificados'} de esta semana quedan como reembolsados al residente (o repuestos al fondo).`, ok: 'Marcar reembolsado' }))) return;
+          if (await hacer(() => R.estadoCaja(ids, 'reembolsado'), 'Semana marcada como reembolsada.')) api.rerender();
+        }));
+        $$('[data-k]', sec).forEach(b => b.addEventListener('click', () => accionCaja(caja(b.closest('[data-kid]').dataset.kid), b.dataset.k)));
+      }
+    };
+  }
+
+  function kItem(k, d) {
+    const o = obra(k.obraId) || {}, res = esResDe(k.obraId), of = esCompras();
+    const r = k.partidaId ? D.requisiciones.find(x => x.partidas.some(p => p.id === k.partidaId)) : null;
+    const b = (act, txt, cls = '') => `<button class="btn btn--sm${cls}" type="button" data-k="${act}">${txt}</button>`;
+    const acts = [
+      k.estado === 'por_comprar' && (res || of) ? b('comprar', `${I.camera}<span>Subir nota</span>`, ' btn--solid') : '',
+      k.estado === 'por_aprobar' && esCoord() ? b('aprobar', `${I.check}<span>Aprobar</span>`, ' btn--solid') + b('rechazar', `${I.close}<span>Rechazar</span>`, ' btn--danger') : '',
+      k.estado === 'por_verificar' && of ? b('verificar', `${I.check}<span>Verificar</span>`, ' btn--solid') : '',
+      k.estado === 'verificado' && of ? b('desverificar', `${I.undo}<span>Deshacer</span>`) : '',
+      k.estado === 'reembolsado' && of ? b('desreemb', `${I.undo}<span>Quitar reembolso</span>`) : '',
+      (k.estado === 'rechazado' || k.estado === 'por_aprobar') && k.origen === 'directo' && (res || esJefe()) ? b('editar', `${I.edit}<span>${k.estado === 'rechazado' ? 'Corregir y reenviar' : 'Editar'}</span>`) : '',
+      of && ['por_verificar', 'verificado'].includes(k.estado) ? b('editar', `${I.edit}<span>Corregir</span>`) : '',
+      (of && k.estado !== 'reembolsado') || (k.origen === 'directo' && res && ['por_aprobar', 'rechazado'].includes(k.estado)) ? b('borrar', I.trash, ' kb-x') : ''
+    ].join('');
+    return `<article class="kitem rv" style="--d:${d}" data-kid="${esc(k.id)}">
+      <div class="k-main">
+        <div class="k-top"><b>${esc(k.concepto || 'Sin concepto')}</b>${kTag(k)}<span class="tagx${k.origen === 'directo' ? ' tagx--ext' : ''}">${k.origen === 'directo' ? 'Gasto directo' : r ? 'De ' + esc(r.folio) : 'De requisición'}</span></div>
+        <p class="k-sub">${k.cantidad ? `${qty(k.cantidad)} ${esc(k.unidad)} · ` : ''}${k.lugar ? esc(k.lugar) + ' · ' : ''}${k.fecha ? esc(fDate(k.fecha)) + ' · ' : ''}${k.comprobante === 'factura' ? 'Factura' : k.comprobante === 'ticket' ? 'Ticket' : 'Nota'}${k.compradoPor && k.estado !== 'por_comprar' ? ' · ' + esc(k.compradoPor) : ''}</p>
+        ${k.estado === 'rechazado' && k.motivoRechazo ? `<p class="k-rej">${I.alert}<span>Rechazado: ${esc(k.motivoRechazo)}</span></p>` : ''}
+        ${k.archivos.length ? `<div class="k-files">${k.archivos.map(a => `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}">${I[/\.(pdf|xml)$/i.test(a.nombre) ? 'file' : 'camera']}<span>${esc(a.nombre)}</span></button>`).join('')}</div>` : ''}
+      </div>
+      <div class="k-side"><b class="k-monto">${k.estado === 'por_comprar' ? '—' : money(k.monto)}</b><div class="k-acts">${acts}</div></div>
+    </article>`;
+  }
+
+  async function accionCaja(k, a) {
+    if (!k) return;
+    if (a === 'comprar' || a === 'editar') return drGasto(k);
+    if (a === 'aprobar') { if (await hacer(() => R.estadoCaja(k.id, 'por_verificar'), 'Gasto aprobado: compras ya lo ve.')) api.rerender(); return; }
+    if (a === 'rechazar') {
+      const m = await api.preguntar({ titulo: 'Rechazar gasto', texto: `<b>${esc(k.concepto)}</b> · ${money(k.monto)}`, etiqueta: 'Motivo (lo verá el residente)', campo: 'area', ok: 'Rechazar', requerido: true, peligro: true });
+      if (m != null && await hacer(() => R.estadoCaja(k.id, 'rechazado', m), 'Gasto rechazado.')) api.rerender();
+      return;
+    }
+    const sig = { verificar: 'verificado', desverificar: 'por_verificar', desreemb: 'verificado' }[a];
+    if (sig) { if (await hacer(() => R.estadoCaja(k.id, sig), sig === 'verificado' ? 'Listo.' : 'Regresó a por verificar.')) api.rerender(); return; }
+    if (a === 'borrar') {
+      const txt = k.origen === 'requisicion' && k.estado === 'por_comprar' ? 'El material regresa a "Autorizado" en su requisición para que compras lo cotice.' : 'Se borra el gasto con sus fotos.';
+      if (!(await api.confirmar({ titulo: 'Quitar de caja chica', texto: `<b>${esc(k.concepto)}</b>. ${txt}`, ok: 'Quitar', peligro: true }))) return;
+      if (await hacer(() => R.borrarCaja(k.id), 'Quitado de caja chica.')) api.rerender();
+    }
+  }
+
+  // Agregar un gasto directo, subir la nota de un material "por comprar" o corregir uno
+  function drGasto(k) {
+    const nuevo = !k, comprar = k && k.estado === 'por_comprar', reenviar = k && k.estado === 'rechazado';
+    const obras = nuevo ? D.obras.filter(o => o.estatus !== 'cerrada' && (esResDe(o.id) || esJefe())) : [obra(k.obraId)].filter(Boolean);
+    if (!obras.length) { toast('Solo el residente de una obra agrega gastos de caja chica.'); return; }
+    const x = k || { concepto: '', cantidad: '', unidad: 'PZA', monto: '', fecha: today(), lugar: '', comprobante: 'nota', archivos: [] };
+    const w = nuevo ? curWk() : { anio: k.anio, semana: k.semana };
+    const deReq = k && k.origen === 'requisicion';
+    api.openPanel(`<form class="dr-form" novalidate>
+      ${drHead('Caja chica', nuevo ? 'Agregar gasto' : comprar ? 'Subir la nota' : reenviar ? 'Corregir y reenviar' : 'Editar gasto')}
+      <div class="dr-b">
+        ${reenviar && k.motivoRechazo ? `<div class="note"><span>${I.alert}</span><p><b>Motivo del rechazo:</b> ${esc(k.motivoRechazo)}</p></div>` : ''}
+        ${nuevo ? '<p class="fld-h">Para lo que compraste en obra y no venía en la requisición. El coordinador lo aprueba antes de que lo vea compras.</p>' : ''}
+        <fieldset class="fs"><legend><span class="mono">1</span>Qué se compró</legend><div class="fs-b"><div class="grid2">
+          <label class="fld"><span class="fld-l">Obra</span><select class="in" name="obra"${nuevo && obras.length > 1 ? '' : ' disabled'}>${obras.map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('')}</select></label>
+          <label class="fld"><span class="fld-l">Semana</span><input class="in" name="semana" type="number" min="1" max="53" value="${w.semana}"${deReq ? ' disabled' : ''}></label>
+          <label class="fld fld--wide"><span class="fld-l">Concepto <em>*</em></span><input class="in" name="concepto" value="${esc(x.concepto)}" placeholder="Ej. cinta, clavos, brocas"${deReq && !esCompras() ? ' disabled' : ''}></label>
+          <label class="fld"><span class="fld-l">Cantidad</span><input class="in" name="cantidad" type="number" min="0" step="any" value="${esc(x.cantidad)}"></label>
+          <label class="fld"><span class="fld-l">Unidad</span><select class="in" name="unidad">${[...new Set([...UNIDADES, x.unidad].filter(Boolean))].map(u => `<option${u === x.unidad ? ' selected' : ''}>${esc(u)}</option>`).join('')}</select></label>
+        </div></div></fieldset>
+        <fieldset class="fs"><legend><span class="mono">2</span>Nota o comprobante</legend><div class="fs-b"><div class="grid2">
+          <label class="fld"><span class="fld-l">Monto total <em>*</em></span><input class="in" name="monto" type="number" min="0" step="0.01" value="${x.monto ? esc(x.monto) : ''}" inputmode="decimal"></label>
+          <label class="fld"><span class="fld-l">Fecha de la nota</span><input class="in" name="fecha" type="date" value="${esc(x.fecha || today())}"></label>
+          <label class="fld fld--wide"><span class="fld-l">Dónde se compró</span><input class="in" name="lugar" value="${esc(x.lugar)}" placeholder="Ferretería, tlapalería…"></label>
+          <div class="fld fld--wide"><span class="fld-l">Tipo</span><div class="toggles">${[['nota', 'Nota de remisión'], ['ticket', 'Ticket'], ['factura', 'Factura']].map(([v, l]) => `<label class="chk chk--pill"><input type="radio" name="comp" value="${v}"${x.comprobante === v ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
+          <label class="fld fld--wide"><span class="fld-l">Foto de la nota <em>*</em></span><input class="in" name="arch" type="file" accept="image/*,application/pdf,.xml" multiple>
+            <span class="fld-h">${x.archivos.length ? 'Ya tiene: ' + x.archivos.map(a => esc(a.nombre)).join(', ') + '. Puedes agregar más.' : 'Toma la foto con el celular o elige el archivo (PDF y XML si es factura).'}</span></label>
+        </div></div></fieldset>
+      </div>
+      ${drFoot(nuevo || reenviar ? 'Enviar al coordinador' : comprar ? 'Guardar nota' : 'Guardar')}
+    </form>`, {}, panel => {
+      const f = $('form', panel), err = $('[data-err]', panel);
+      f.addEventListener('input', api.markDirty);
+      f.addEventListener('submit', async e => {
+        e.preventDefault();
+        const files = [...f.arch.files];
+        const monto = parseFloat(f.monto.value);
+        if (!f.concepto.value.trim()) { err.textContent = 'Escribe qué se compró.'; return; }
+        if (!(monto > 0)) { err.textContent = 'Escribe el monto de la nota.'; return; }
+        if (!files.length && !x.archivos.length) { err.textContent = 'Sube la foto de la nota.'; return; }
+        const sem = parseInt(f.semana.value, 10);
+        const g = Object.assign({}, k || {}, {
+          obraId: k ? k.obraId : f.obra.value, anio: w.anio, semana: sem >= 1 && sem <= 53 ? sem : w.semana,
+          concepto: f.concepto.value, cantidad: f.cantidad.value, unidad: f.unidad.value, monto, fecha: f.fecha.value, lugar: f.lugar.value,
+          comprobante: (f.querySelector('[name="comp"]:checked') || {}).value || 'nota', archivos: x.archivos
+        });
+        ocupado(panel, true, 'Subiendo…');
+        try { await R.guardarGasto(g, files, comprar ? 'por_verificar' : reenviar ? 'por_aprobar' : undefined); }
+        catch (x2) { ocupado(panel, false, 'Guardar'); err.textContent = x2.message; return; }
+        await cargar();
+        api.closeDrawer(true);
+        toast(nuevo || reenviar ? 'Gasto enviado: falta que lo apruebe el coordinador.' : comprar ? 'Nota guardada: compras la verificará.' : 'Gasto actualizado.');
+        if (location.hash === '#/caja') api.rerender(); else location.hash = '#/caja';
       });
     });
   }
@@ -1659,17 +1844,19 @@
   }
 
   return {
-    pages: { requisiciones: pageReqs, r: pageReq, compras: pageCompras, c: pageCompra, obras: pageObras },
+    pages: { requisiciones: pageReqs, r: pageReq, compras: pageCompras, c: pageCompra, obras: pageObras, caja: pageCaja },
     nav: { r: 'requisiciones', c: 'compras' },
-    titulos: { requisiciones: 'Requisiciones', compras: 'Compras', obras: 'Obras' },
+    titulos: { requisiciones: 'Requisiciones', compras: 'Compras', obras: 'Obras', caja: 'Caja chica' },
     acciones: {
       requisiciones: { label: 'Nueva requisición', act: 'nueva-req', puede: () => esCoord() || D.obras.some(o => esResDe(o.id)) },
       compras: { label: 'Nueva requisición', act: 'nueva-req', puede: () => esCoord() || D.obras.some(o => esResDe(o.id)) },
-      obras: { label: 'Agregar obra', act: 'nueva-obra', puede: esJefe }
+      obras: { label: 'Agregar obra', act: 'nueva-obra', puede: esJefe },
+      caja: { label: 'Agregar gasto', act: 'nuevo-gasto', puede: () => esJefe() || D.obras.some(o => esResDe(o.id)) }
     },
     onAct(a) {
       if (a === 'nueva-req') drReq(null);
       if (a === 'nueva-obra' && esJefe()) drObra(null);
+      if (a === 'nuevo-gasto') cargar().then(() => drGasto(null));
     },
     cargar, chrome, fichaProveedor, datosPanel, datosBind,
     importa: data => !!data && data.formato === R.FORMATO,

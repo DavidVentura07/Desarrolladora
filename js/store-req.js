@@ -43,6 +43,7 @@
       const p = o.residente_id && window.Nube.perfiles().find(x => x.id === o.residente_id);
       return { nombre: p ? (p.nombre || p.correo) : '', correo: p ? p.correo : '', telefono: p ? p.telefono || '' : '' };
     })(),
+    fondoCaja: o.fondo_caja == null ? null : num(o.fondo_caja),   // v0.9: fondo fijo de caja chica (vacío = se reembolsa)
     historial: [],   // residentes anteriores (v0.7, tabla obra_residentes); se llena en cargar()
     suplentes: arr(o.obra_suplentes).map(s => ({ id: s.id, perfilId: s.perfil_id, nombre: quien(s.perfil_id), desde: s.desde, hasta: s.hasta, motivo: str(s.motivo) }))
       .sort((a, b) => b.desde.localeCompare(a.desde)),
@@ -111,26 +112,37 @@
     };
   }
 
+  // v0.9: gasto de caja chica
+  const deCaja = k => ({
+    id: k.id, obraId: k.obra_id, anio: k.anio, semana: k.semana, origen: k.origen, partidaId: k.partida_id || '',
+    concepto: str(k.concepto), cantidad: num(k.cantidad), unidad: str(k.unidad), monto: num(k.monto), fecha: fecha(k.fecha),
+    lugar: str(k.lugar), comprobante: k.comprobante || 'nota', archivos: arr(k.archivos), estado: k.estado, motivoRechazo: str(k.motivo_rechazo),
+    creadoPor: quien(k.creado_por), creadoEn: k.creado_en, compradoPor: quien(k.comprado_por), aprobadoPor: quien(k.aprobado_por),
+    verificadoPor: quien(k.verificado_por), reembolsadoEn: k.reembolsado_en || '', actualizadoEn: k.actualizado_en
+  });
+
   /* ---------- Estado en memoria ---------- */
-  let db = { obras: [], requisiciones: [], compras: [], config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
+  let db = { obras: [], requisiciones: [], compras: [], caja: [], config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
 
   // Tablas nuevas de la v0.7: si aún no se corre 04-ajustes.sql, la app sigue funcionando sin ellas
   const opcional = q => q.then(r => (r.error ? { data: [], error: null } : r), () => ({ data: [], error: null }));
 
   async function cargar() {
-    const [, obras, reqs, compras, config, hist, avisos] = await Promise.all([
+    const [, obras, reqs, compras, config, hist, avisos, caja] = await Promise.all([
       window.Nube.recargarPerfiles(),   // nombres de residentes, suplentes y de quién hizo cada cosa
       sb().from('obras').select('*, obra_suplentes(*)').order('nombre'),
       sb().from('requisiciones').select('*, partidas(*)').order('anio', { ascending: false }).order('semana', { ascending: false }),
       sb().from('compras').select('*, compra_partidas(partida_id), compra_documentos(*)'),
       sb().from('config').select('clave, valor'),
       opcional(sb().from('obra_residentes').select('*').order('desde', { ascending: false })),
-      opcional(sb().from('avisos').select('*').order('en', { ascending: false }))
+      opcional(sb().from('avisos').select('*').order('en', { ascending: false })),
+      opcional(sb().from('caja_chica').select('*').order('creado_en'))
     ]);
     const d = {
       obras: ok(obras).map(deObra),
       requisiciones: ok(reqs).map(deRequisicion),
       compras: ok(compras).map(deCompra),
+      caja: ok(caja).map(deCaja),
       config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] }
     };
     ok(config).forEach(c => {
@@ -147,6 +159,9 @@
       const r = a.requisicion_id && d.requisiciones.find(x => x.id === a.requisicion_id);
       if (r) r.avisos.push({ evento: str(a.evento), en: a.en, por: quien(a.por), para: arr(a.para) });
     });
+    // Material mandado a caja chica
+    const porCaja = new Map(d.caja.filter(k => k.partidaId).map(k => [k.partidaId, k.id]));
+    d.requisiciones.forEach(r => r.partidas.forEach(p => { p.cajaId = porCaja.get(p.id) || ''; }));
     // Liga material ↔ compra y compra ↔ requisición
     const porPartida = new Map();
     d.compras.forEach(c => c.partidas.forEach(pid => porPartida.set(pid, c)));
@@ -202,6 +217,7 @@
     /* Obras */
     async guardarObra(o) {
       const fila = { nombre: str(o.nombre), clave: str(o.clave).toUpperCase(), direccion: str(o.direccion), estatus: o.estatus === 'cerrada' ? 'cerrada' : 'activa', residente_id: o.residenteId || null };
+      if ('fondoCaja' in o) fila.fondo_caja = o.fondoCaja === '' || o.fondoCaja == null ? null : num(o.fondoCaja);
       if (o.id && find('obras', o.id)) ok(await sb().from('obras').update(fila).eq('id', o.id).select('id'));
       else { o.id = o.id || uid(); ok(await sb().from('obras').insert(Object.assign({ id: o.id }, fila)).select('id')); }
       return o.id;
@@ -358,6 +374,44 @@
       }
       return data;
     },
+    /* Caja chica (v0.9) */
+    async mandarACaja(partidaIds) {
+      ok(await sb().from('caja_chica').insert(partidaIds.map(pid => ({ origen: 'requisicion', partida_id: pid, obra_id: (db.requisiciones.find(r => r.partidas.some(x => x.id === pid)) || {}).obraId, anio: 2000, semana: 1 }))).select('id'));
+    },
+    // g = { id?, obraId, anio, semana, origen, concepto, cantidad, unidad, monto, fecha, lugar, comprobante, archivos }, nuevos = File[], estado = destino opcional
+    async guardarGasto(g, nuevos = [], estado) {
+      const id = g.id || uid();
+      const subidos = [];
+      try {
+        for (const f of nuevos) subidos.push(await subirArchivo(g.obraId, 'caja-' + id, f));
+        const fila = { concepto: str(g.concepto).toUpperCase(), cantidad: num(g.cantidad), unidad: str(g.unidad), monto: num(g.monto), fecha: g.fecha || null,
+          lugar: str(g.lugar), comprobante: g.comprobante || 'nota', archivos: [...arr(g.archivos), ...subidos.map(({ ruta, nombre }) => ({ ruta, nombre }))] };
+        if (estado) fila.estado = estado;
+        if (g.id) {
+          const filas = ok(await sb().from('caja_chica').update(fila).eq('id', id).select('id'));
+          if (!filas.length) throw new Error('Tu rol no puede modificar este gasto.');
+        } else {
+          ok(await sb().from('caja_chica').insert(Object.assign({ id, obra_id: g.obraId, anio: g.anio, semana: g.semana, origen: 'directo' }, fila)).select('id'));
+        }
+      } catch (e) {
+        await borrarArchivos(subidos.map(x => x.ruta)).catch(() => {});
+        throw e;
+      }
+      return id;
+    },
+    async estadoCaja(ids, estado, motivo) {
+      const f = { estado };
+      if (motivo != null) f.motivo_rechazo = str(motivo);
+      const filas = ok(await sb().from('caja_chica').update(f).in('id', [].concat(ids)).select('id'));
+      if (!filas.length) throw new Error('No tienes permiso para este cambio.');
+    },
+    async borrarCaja(id) {
+      const k = db.caja.find(x => x.id === id);
+      const filas = ok(await sb().from('caja_chica').delete().eq('id', id).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede quitar este gasto.');
+      if (k) await borrarArchivos(k.archivos.map(a => a.ruta)).catch(() => {});
+    },
+
     // Liga temporal (1 hora) para ver o descargar un archivo privado
     async urlArchivo(ruta) {
       const d = ok(await sb().storage.from(BUCKET).createSignedUrl(ruta, 3600));

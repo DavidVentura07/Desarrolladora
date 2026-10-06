@@ -1421,12 +1421,12 @@ body[data-rol="direccion"] .solo-jefes, body[data-rol="admin"] .solo-jefes { dis
    ========================================================= */
 /* Barra lateral: más compacta para que quepan los 5 módulos de "Muy pronto" a 800 px de alto */
 .side-app { margin-bottom: 16px; }
-.side-nav a { height: 37px; white-space: nowrap; }   /* v0.8: 37 px para que quepa Bitácora a 1280×800 */
+.side-nav a { height: 34px; white-space: nowrap; }   /* v0.9: 34 px para que quepan Bitácora y Caja chica a 1280×800 */
 .side-nav a > span:first-child, .side-soon i { flex: none; display: grid; }
 .side-sep { display: block; height: 1px; margin: 6px 14px; background: var(--line); }
 .side-soon { margin-top: 12px; gap: 0; }
 .side-soon p { margin-bottom: 2px; }
-.side-soon span { height: 24px; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-soon span { height: 21px; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-soon span .ico { width: 18px; height: 18px; }
 .side-foot { padding-top: 14px; gap: 8px; }
 .side .backup { padding: 10px 14px; }
@@ -1600,3 +1600,27 @@ body.welcome-open { overflow: hidden; }
 /* v0.8 · Usuarios: separación entre las tarjetas (lista de usuarios y "Qué puede hacer cada rol") */
 .u-panel + .u-panel { margin-top: 18px; }
 .tagx--vacia { background: var(--bad-bg); color: var(--bad); }
+
+/* v0.9 · Caja chica */
+.st--caja { color: var(--sun-deep); background: var(--sun-bg); }
+.sbar .b-caja, .slegend .b-caja { background: var(--sun); }
+.klist { display: flex; flex-direction: column; gap: 10px; }
+.kitem { display: flex; gap: 16px; align-items: flex-start; padding: 16px 18px; border-radius: var(--r-md); background: var(--surface); }
+.k-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.k-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.k-top b { font-weight: 750; font-size: 15px; }
+.k-sub { margin: 0; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.k-rej { display: flex; gap: 6px; margin: 0; color: var(--bad); font-size: 12.5px; font-weight: 700; }
+.k-rej .ico { width: 15px; height: 15px; flex: none; }
+.k-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.k-files .fchip { max-width: 220px; }
+.k-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.k-monto { font-size: 20px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.k-acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.btn--sm { height: 36px; padding: 0 14px; font-size: 13px; }
+.kb-x { width: 36px; padding: 0; justify-content: center; color: var(--muted); }
+.ogroup-h .btn--sm { margin-left: auto; }
+@media (max-width: 900px) {
+  .kitem { flex-direction: column; }
+  .k-side { width: 100%; flex-direction: row; justify-content: space-between; align-items: center; }
+}
