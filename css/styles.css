@@ -1596,3 +1596,7 @@ body.welcome-open { overflow: hidden; }
 .bit-acc.insert { background: var(--ok-bg); color: var(--ok); }
 .bit-acc.delete { background: var(--bad-bg); color: var(--bad); }
 .bit-acc.update { background: var(--lav); color: var(--navy); }
+
+/* v0.8 · Usuarios: separación entre las tarjetas (lista de usuarios y "Qué puede hacer cada rol") */
+.u-panel + .u-panel { margin-top: 18px; }
+.tagx--vacia { background: var(--bad-bg); color: var(--bad); }

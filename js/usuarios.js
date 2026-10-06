@@ -67,7 +67,7 @@
 
         <div class="u-stats rv" style="--d:100">${ROLES.map(r => `<div><small>${esc(rolLabel(r.id))}</small><b>${cuenta(r.id)}</b></div>`).join('')}</div>
 
-        ${pendientes.length ? `<section class="panel rv" style="--d:140">
+        ${pendientes.length ? `<section class="panel u-panel rv" style="--d:140">
           <header class="panel-h"><h2>Invitados que aún no entran <span class="n">${pendientes.length}</span></h2></header>
           <div class="panel-b panel-b--flush"><div class="tablewrap"><table class="tbl">
             <thead><tr><th class="pl">Persona</th><th>Rol</th><th>Celular</th><th>Invitado</th><th class="pr"></th></tr></thead>
@@ -81,7 +81,7 @@
           </table></div></div>
         </section>` : ''}
 
-        <section class="panel rv" style="--d:180">
+        <section class="panel u-panel rv" style="--d:180">
           <header class="panel-h"><h2>Con acceso <span class="n">${activos.length}</span></h2><button class="tbtn tbtn--sm" type="button" data-act="invitar">${I.plus}<span>Invitar</span></button></header>
           <div class="panel-b panel-b--flush"><div class="tablewrap"><table class="tbl">
             <thead><tr><th class="pl">Persona</th><th>Rol</th><th>Residente de</th><th>Celular</th><th>Estado</th><th class="pr">Desde</th></tr></thead>
@@ -89,12 +89,12 @@
           </table></div></div>
         </section>
 
-        ${inactivos.length ? `<section class="panel rv" style="--d:220">
+        ${inactivos.length ? `<section class="panel u-panel rv" style="--d:220">
           <header class="panel-h"><h2>Sin acceso <span class="n">${inactivos.length}</span></h2></header>
           <div class="panel-b panel-b--flush"><div class="tablewrap"><table class="tbl"><tbody>${inactivos.map(fila).join('')}</tbody></table></div></div>
         </section>` : ''}
 
-        <section class="panel rv" style="--d:260">
+        <section class="panel u-panel rv" style="--d:260">
           <header class="panel-h"><h2>Qué puede hacer cada rol</h2></header>
           <div class="panel-b"><dl class="dl u-roles">${ROLES.map(r => `<div><dt>${esc(rolLabel(r.id))}</dt><dd>${esc(r.puede)}</dd></div>`).join('')}</dl>
           <p class="muted small">Estas reglas las revisa el servidor: aunque alguien manipule la página, no puede hacer lo que su rol no permite.</p></div>

@@ -671,7 +671,7 @@
         ${difs.length ? `<p class="dif-l">${I.alert}<span>${esc(difs[0].txt)}${difs.length > 1 ? ` <b>(+${difs.length - 1} más)</b>` : ''}</span></p>` : ''}
         <span class="muted small">${r ? 'Requisición ' + esc(r.folio) + ' · ' : ''}${c.partidas.length} materiales · entrega ${esc(fDate(c.fechaEntrega))}</span>
       </div>
-      <div class="c-total"><b>${money(montoCompra(c))}</b>${c.iva ? '' : '<span class="tagx tagx--siniva">Sin IVA</span>'}${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
+      <div class="c-total"><b>${money(montoCompra(c))}</b>${c.partidas.length ? '' : '<span class="tagx tagx--vacia" title="Se quitaron todos sus materiales; si era de prueba, bórrala">Sin materiales</span>'}${c.iva ? '' : '<span class="tagx tagx--siniva">Sin IVA</span>'}${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
     </article>`;
   }
 
@@ -793,6 +793,7 @@
         </header>
 
         ${difs.length ? `<div class="note note--bad rv" style="--d:50" role="alert">${I.alert}<p><b>${difs.length === 1 ? 'Hay una diferencia' : 'Hay ' + difs.length + ' diferencias'} en esta compra.</b> Revísala con el proveedor antes de pagar o archivar.<br>${difs.map(x => esc(x.txt)).join('<br>')}</p></div>` : ''}
+        ${mats.length ? '' : `<div class="note note--bad rv" style="--d:45">${I.alert}<p><b>Esta compra ya no tiene materiales.</b> Sus documentos y su pago siguen contando en los totales. Si era de prueba o ya no aplica, ${esAdmin() ? 'usa <b>Borrar compra</b>.' : 'pide al admin técnico que la borre.'}</p></div>`}
         ${esCompras() || esAdmin() ? `<div class="c-acts rv" style="--d:40">
           ${esCompras() ? `<div class="seg" role="group" aria-label="IVA de la compra"><button type="button" data-iva="1" aria-pressed="${c.iva}">Con IVA</button><button type="button" data-iva="0" aria-pressed="${!c.iva}">Sin IVA</button></div>` : ''}
           ${esAdmin() ? `<button class="tbtn tbtn--sm" type="button" data-mover-c>${I.left}<span>Mover de semana</span></button>
