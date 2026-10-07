@@ -452,7 +452,7 @@
       if (error) {
         let msg = '';
         try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
-        throw new Error(msg || 'No se pudo enviar el correo (¿está publicada la función "aviso-requisicion" en Supabase?).');
+        throw new Error(msg || 'No se pudo enviar el aviso (¿está publicada la función "aviso-requisicion" en Supabase?).');
       }
       return data;
     },

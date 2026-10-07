@@ -475,7 +475,7 @@
             <span><span class="muted">Enviada</span> <b>${r.enviadaEn ? esc(fDateT(r.enviadaEn)) : 'aún no'}</b></span>
             <span><span class="muted">Revisada</span> <b>${r.revisadaEn ? esc(fDateT(r.revisadaEn)) + ' · ' + esc(r.revisadaPor || '') : 'pendiente'}</b></span>
             <span><span class="muted">Suministro solicitado</span> <b>${esc(fDateL(r.fechaSuministro))}</b></span>
-            ${r.avisos.length ? `<span class="r-aviso">${I.mail}<span class="muted">${esc(AVISO_EV[r.avisos[0].evento] || 'Aviso')}</span> <b>${esc(r.avisos[0].para.map(x => x.nombre || x.correo).join(', '))} · ${esc(fDateT(r.avisos[0].en))}</b></span>` : ''}
+            ${r.avisos.length ? `<span class="r-aviso">${r.avisos[0].para.every(x => x.canal === 'whatsapp') ? I.wa : I.mail}<span class="muted">${esc(AVISO_EV[r.avisos[0].evento] || 'Aviso')}</span> <b>${esc(avisoPara(r.avisos[0].para))} · ${esc(fDateT(r.avisos[0].en))}</b></span>` : ''}
             ${r.nota ? `<span class="muted">${esc(r.nota)}</span>` : ''}
           </div>
         </header>
@@ -594,17 +594,18 @@
     return { anio, semana: n };
   }
 
-  // Correo automático de la requisición; si falla, el cambio de estado ya quedó guardado
-  const AVISO_EV = { enviada: 'Correo al coordinador', devuelta: 'Correo de devolución', revisada: 'Correo de rechazos' };
+  // Aviso automático de la requisición (WhatsApp o correo); si falla, el cambio de estado ya quedó guardado
+  const AVISO_EV = { enviada: 'Aviso al coordinador', devuelta: 'Aviso de devolución', revisada: 'Aviso de rechazos' };
+  const avisoPara = xs => xs.map(p => `${p.nombre || p.correo || p.telefono}${p.canal === 'whatsapp' ? ' (WhatsApp)' : p.canal === 'correo' ? ' (correo)' : ''}`).join(', ');
   async function avisar(id, evento) {
     try {
       const x = await R.avisarRequisicion(id, evento);
       if (!x || x.omitido) return;
-      toast(`Correo enviado a ${x.aviso.para.map(p => p.nombre || p.correo).join(' y ')}.`);
+      toast(`Aviso enviado a ${avisoPara(x.aviso.para)}.${x.fallas && x.fallas.length ? ' Hubo problemas: ' + x.fallas.join(' · ') : ''}`);
       await cargar();
       if (location.hash === '#/r/' + id) api.rerender();
     } catch (e) {
-      toast(`Quedó guardado, pero no salió el correo: ${e.message}`);
+      toast(`Quedó guardado, pero no salió el aviso: ${e.message}`);
     }
   }
 
