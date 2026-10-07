@@ -1673,3 +1673,100 @@ body[data-rol="direccion"] .solo-compras, body[data-rol="admin"] .solo-compras, 
 .pf tfoot tr.tt td { font-weight: 800; padding-top: 5px; }
 .pf .pf-n { margin: 6px 0 0; font-size: 7.5pt; }
 @media (max-width: 900px) { .ogroup-h:has(.k-rep) { flex-wrap: wrap; } .k-rep { margin-left: 0; } }
+
+/* v0.10 · "Muy pronto" plegable (cerrado por defecto) */
+.soon-t { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; margin: 0; padding: 0 14px; border: 0; border-radius: 10px; background: none; color: var(--muted); font: 750 12px/1 var(--f); cursor: pointer; transition: color .2s, background .2s; }
+.soon-t:hover { color: var(--navy); background: var(--bg); }
+.soon-t b { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--bg); font-size: 10.5px; font-weight: 800; display: grid; place-items: center; }
+.soon-t i { margin-left: auto; display: grid; }
+.soon-t i .ico { width: 14px; height: 14px; transition: transform .25s; }
+.side-soon.open .soon-t i .ico { transform: rotate(180deg); }
+.soon-list { display: none; }
+.side-soon.open .soon-list { display: grid; }
+
+/* Programación de colados (2026-10-07) */
+.col-list { display: flex; flex-direction: column; gap: 10px; }
+.colcard { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 16px 20px; cursor: pointer; }
+.col-dia { display: grid; justify-items: center; gap: 2px; padding: 10px 6px; border-radius: 18px; background: var(--lav); color: var(--navy); }
+.col-dia b { font-size: 24px; font-weight: 800; line-height: 1; }
+.col-dia small { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.col-dia em { font-style: normal; font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
+.col-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.col-main .sub { color: var(--muted); font-size: 13px; }
+.col-conc { margin: 2px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.col-conc span { padding: 4px 10px; border-radius: 99px; background: var(--bg); font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.col-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.col-side > b { font-size: 18px; font-weight: 800; white-space: nowrap; }
+.col-prox { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 16px; padding: 14px 18px; border-radius: var(--r-lg); background: var(--ok-bg); }
+.col-prox > b { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ok); }
+.col-prox > b .ico { width: 16px; height: 16px; }
+.col-prox a { display: flex; flex-direction: column; padding: 8px 12px; border-radius: 14px; background: var(--surface); font-size: 12.5px; }
+.col-prox a span { font-weight: 800; color: var(--ink); }
+.col-prox a em { font-style: normal; color: var(--muted); font-weight: 600; }
+.col-av { display: grid; place-items: center; background: var(--lav); color: var(--navy); }
+.col-av .ico { width: 30px; height: 30px; }
+.d-blk { display: block; }
+.col-k { padding: 14px; margin-bottom: 12px; border-radius: 18px; background: var(--bg); }
+.col-k-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.col-k-h b { font-size: 13.5px; }
+.col-k .in { background: var(--surface); }
+.grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.fld--wide2 { grid-column: span 2; }
+.col-check { display: flex; flex-direction: column; gap: 2px; }
+.pf .pf-kv { margin: 8px 0; }
+.pf .pf-kv th { width: 24%; text-align: left; background: #EDEDED; }
+.pf .pf-kv td { text-align: left; height: auto; padding: 3px 6px; }
+.pf .pf-marca { margin-bottom: 6px; padding: 4px; border: 1.5px solid #B4313A; color: #B4313A; text-align: center; font-weight: 800; font-size: 10pt; letter-spacing: .1em; }
+.pf--col .pf-n { margin-top: 10px; }
+@media (max-width: 900px) {
+  .colcard { grid-template-columns: 60px minmax(0, 1fr); padding: 14px; gap: 12px; }
+  .col-side { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; align-items: center; }
+  .grid3 { grid-template-columns: minmax(0, 1fr); }
+  .fld--wide2 { grid-column: auto; }
+}
+.col-kl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.col-kl li { display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px; border-radius: 16px; background: var(--bg); }
+.col-kv { flex: none; min-width: 64px; font-size: 18px; font-weight: 800; color: var(--navy); }
+.col-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.col-chips span { padding: 4px 10px; border-radius: 99px; background: var(--surface); font-size: 12.5px; font-weight: 650; }
+.col-kl small { display: block; margin-top: 6px; }
+.col-tot { margin: 10px 4px 0; text-align: right; color: var(--muted); font-weight: 650; }
+.col-tot b { color: var(--ink); font-size: 16px; }
+/* Programación de colados · cotizaciones, compra, plazos y cierre (v0.11) */
+.col-hb { display: flex; flex-wrap: wrap; gap: 8px; }
+.col-cmp td, .col-cmp th { vertical-align: top; }
+.col-cmp tr.col-win td { background: var(--ok-bg); }
+.col-cmp tr.col-off td { opacity: .55; }
+.col-cmp tr.col-cond td { padding-top: 0; border-top: 0; }
+.col-acc { white-space: nowrap; text-align: right; }
+.col-acc .tbtn, .col-acc .ibtn { margin-left: 4px; }
+.col-elegir { background: var(--navy) !important; color: #fff !important; }
+.col-min { color: var(--ok); font-weight: 750; }
+.col-arch { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.col-arch .fchip { padding: 4px 8px; font-size: 11.5px; }
+.col-compras { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.col-compras > b { font-size: 13px; }
+.col-compras .tline { text-decoration: none; color: inherit; }
+.col-compras .tacts { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.col-aviso { display: flex; gap: 8px; margin: 10px 0 0; padding: 10px 12px; border-radius: 14px; background: var(--sun-bg); color: var(--sun-deep); font-size: 13px; font-weight: 600; }
+.col-aviso .ico { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.col-neg { color: var(--bad); }
+.col-lin { display: grid; grid-template-columns: minmax(0, 1fr) 90px 140px; gap: 10px; align-items: end; padding: 10px 12px; margin-bottom: 8px; border-radius: 14px; background: var(--bg); }
+.col-lin .in { background: var(--surface); }
+.col-lin-c { align-self: center; font-size: 13px; font-weight: 650; }
+.col-sum { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--lav); color: var(--navy-deep); font-size: 13px; }
+.col-res { margin-top: 16px; padding: 16px; border-radius: 18px; background: var(--bg); }
+.col-res h3 { margin: 0 0 10px; font-size: 15px; }
+.col-r { padding: 10px 0; border-top: 1px solid var(--line); }
+.col-r:first-of-type { border-top: 0; }
+.col-r p { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 0; font-size: 13px; }
+.col-r p .ico { width: 16px; height: 16px; flex: none; }
+.col-r p.ok { color: var(--ok); } .col-r p.no { color: var(--bad); }
+.col-r .btn.is-sent { background: var(--ok-bg); color: var(--ok); }
+.col-pp legend .chk, .col-pv legend { font-weight: 750; }
+.col-add { margin-bottom: 14px; }
+@media (max-width: 900px) {
+  .col-lin { grid-template-columns: 1fr 1fr; }
+  .col-lin-c { grid-column: 1 / -1; }
+  .col-acc { white-space: normal; }
+}

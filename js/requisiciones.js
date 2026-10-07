@@ -216,6 +216,9 @@
   const entrega = p => { const c = compra(p.compraId); return c ? (c.entregas && c.entregas[p.id]) || c.fechaEntrega : ''; };
   const stats = r => { const s = {}; TODOS.forEach(e => { s[e.id] = 0; }); r.partidas.forEach(p => { s[estado(r, p)]++; }); return s; };
   const comprasDe = r => D.compras.filter(c => c.requisicionId === r.id);
+  // v0.11: compra que viene de un colado (concreto o bombeo; no lleva materiales)
+  const coladoDe = c => (c.coladoId ? (D.colados || []).find(k => k.id === c.coladoId) || { id: c.coladoId, folio: 'Colado', elemento: '', ubicacion: '', volumen: 0, fecha: '' } : null);
+  const m3 = n => `${Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 2 })} m³`;
   const montoCompra = c => (c.factura ? c.factura.total : c.cotizacion ? c.cotizacion.monto : 0);
   const montoReq = r => comprasDe(r).reduce((a, c) => a + montoCompra(c), 0);
   const seguros = s => s.pagado + s.recibido;
@@ -714,12 +717,13 @@
           <span class="sub">${esc(o.nombre || '')}${c.factura && c.factura.folio ? ' · ' + esc((c.factura.serie || '') + ' ' + c.factura.folio) : ''}${c.iva && fa && pred && fa.id !== pred.id ? ' · a ' + esc(fa.nombre) : ''}</span></div>
       </div>
       <div class="l-mid">
-        <p class="w-serv c-mats">${mats.slice(0, 3).map(p => `${esc(p.insumo)} <span class="muted">(${qty(p.cantidad)} ${esc(p.unidad)})</span>`).join(' · ')}${mats.length > 3 ? ` <span class="muted">y ${mats.length - 3} más</span>` : ''}</p>
+        ${coladoDe(c) ? `<p class="w-serv c-mats">${I.colado || ''} Colado ${esc(coladoDe(c).folio)} · ${esc([coladoDe(c).elemento, coladoDe(c).ubicacion].filter(Boolean).join(' · '))} <span class="muted">(${m3(coladoDe(c).volumen)})</span></p>` : ''}
+        <p class="w-serv c-mats"${coladoDe(c) ? ' hidden' : ''}>${mats.slice(0, 3).map(p => `${esc(p.insumo)} <span class="muted">(${qty(p.cantidad)} ${esc(p.unidad)})</span>`).join(' · ')}${mats.length > 3 ? ` <span class="muted">y ${mats.length - 3} más</span>` : ''}</p>
         <div class="dchips">${docsDe(c).map(([l, ok]) => ok && difEn.has(chipDe[l]) ? `<span class="dchip bad">${I.alert}${l}</span>` : `<span class="dchip${ok ? ' ok' : ''}">${ok ? I.check : I.clock}${l}</span>`).join('')}</div>
         ${difs.length ? `<p class="dif-l">${I.alert}<span>${esc(difs[0].txt)}${difs.length > 1 ? ` <b>(+${difs.length - 1} más)</b>` : ''}</span></p>` : ''}
-        <span class="muted small">${r ? 'Requisición ' + esc(r.folio) + ' · ' : ''}${c.partidas.length} materiales · entrega ${esc(fDate(c.fechaEntrega))}</span>
+        <span class="muted small">${coladoDe(c) ? 'Colado del ' + esc(fDate(coladoDe(c).fecha || c.fechaEntrega)) : `${r ? 'Requisición ' + esc(r.folio) + ' · ' : ''}${c.partidas.length} materiales · entrega ${esc(fDate(c.fechaEntrega))}`}</span>
       </div>
-      <div class="c-total"><b>${money(montoCompra(c))}</b>${c.partidas.length ? '' : '<span class="tagx tagx--vacia" title="Se quitaron todos sus materiales; si era de prueba, bórrala">Sin materiales</span>'}${c.iva ? '' : '<span class="tagx tagx--siniva">Sin IVA</span>'}${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${rec && rec.tipo !== 'ok' ? receptorTag(c) : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
+      <div class="c-total"><b>${money(montoCompra(c))}</b>${c.partidas.length || c.coladoId ? '' : '<span class="tagx tagx--vacia" title="Se quitaron todos sus materiales; si era de prueba, bórrala">Sin materiales</span>'}${c.iva ? '' : '<span class="tagx tagx--siniva">Sin IVA</span>'}${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${rec && rec.tipo !== 'ok' ? receptorTag(c) : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
     </article>`;
   }
 
@@ -864,7 +868,7 @@
           ${esCompras() && D.fiscalListo ? `<br><button class="btn btn--sm" type="button" data-agregar-fiscal>${I.plus}<span>Agregar a datos fiscales</span></button>` : ''}</p></div>`
           : rec && rec.tipo === 'otra' ? `<div class="note note--warn rv" style="--d:48">${I.alert}<p><b>Se facturó a ${esc(rec.razon.nombre)}</b> (${esc(rec.razon.rfc)}), pero se pidió a ${esc(rec.pedida.nombre)}. Si así se acordó, cambia "Facturar a".
           ${selFa ? `<br><button class="btn btn--sm" type="button" data-fa-usar="${esc(rec.razon.id)}">${I.check}<span>Facturar a ${esc(rec.razon.nombre)}</span></button>` : ''}</p></div>` : ''}
-        ${mats.length ? '' : `<div class="note note--bad rv" style="--d:45">${I.alert}<p><b>Esta compra ya no tiene materiales.</b> Sus documentos y su pago siguen contando en los totales. Si era de prueba o ya no aplica, ${esAdmin() ? 'usa <b>Borrar compra</b>.' : 'pide al admin técnico que la borre.'}</p></div>`}
+        ${mats.length || c.coladoId ? '' : `<div class="note note--bad rv" style="--d:45">${I.alert}<p><b>Esta compra ya no tiene materiales.</b> Sus documentos y su pago siguen contando en los totales. Si era de prueba o ya no aplica, ${esAdmin() ? 'usa <b>Borrar compra</b>.' : 'pide al admin técnico que la borre.'}</p></div>`}
         ${esCompras() || esAdmin() ? `<div class="c-acts rv" style="--d:40">
           ${esCompras() ? `<div class="seg" role="group" aria-label="IVA de la compra"><button type="button" data-iva="1" aria-pressed="${c.iva}">Con IVA</button><button type="button" data-iva="0" aria-pressed="${!c.iva}">Sin IVA</button></div>` : ''}
           ${selFa}
@@ -894,7 +898,10 @@
 
         <div class="d-grid">
           <div class="d-main">
-            <section class="panel rv" style="--d:200">
+            ${coladoDe(c) ? `<section class="panel rv" style="--d:200"><header class="panel-h"><h2>Colado</h2></header><div class="panel-b">
+              <p class="lead-s"><a class="link-u" href="#/col/${esc(coladoDe(c).id)}">${I.colado || ''}${esc(coladoDe(c).folio)}</a> · ${esc([coladoDe(c).elemento, coladoDe(c).ubicacion].filter(Boolean).join(' · '))}</p>
+              <p class="muted small">${esc(fDateL(coladoDe(c).fecha))}${coladoDe(c).hora ? ' · ' + esc(coladoDe(c).hora) + ' h' : ''} · ${m3(coladoDe(c).volumen)} pedidos. Las especificaciones, la cotización elegida y el volumen real están en el colado. Sube aquí la remisión de cada olla (una foto por remisión).</p></div></section>` : ''}
+            <section class="panel rv" style="--d:200"${coladoDe(c) ? ' hidden' : ''}>
               <header class="panel-h"><h2>Materiales de esta compra <span class="n">${mats.length}</span></h2></header>
               <div class="panel-b panel-b--flush"><div class="tablewrap">
                 <table class="tbl rtbl rtbl--c"><thead><tr><th class="c-n">#</th><th>Insumo</th><th class="num">Cantidad</th><th>Unidad</th><th>Entrega</th><th>Estado</th></tr></thead>
@@ -1058,6 +1065,13 @@
 
   function avisoTexto(c, mats) {
     const o = obra(c.obraId) || {};
+    const k = coladoDe(c);
+    if (k) return `✅ Colado pagado · ${o.nombre || ''}
+${c.proveedor.nombre} ya está pagado:
+• ${k.folio} · ${[k.elemento, k.ubicacion].filter(Boolean).join(' · ')} (${m3(k.volumen)})
+
+Fecha del colado: ${fDateL(k.fecha)}${k.hora ? ' a las ' + k.hora : ''}.
+Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     const lis = mats.slice(0, 6).map(p => `• ${p.insumo.charAt(0) + p.insumo.slice(1).toLowerCase()} (${qty(p.cantidad)} ${p.unidad})`).join('\n');
     const mas = mats.length > 6 ? `\n• y ${mats.length - 6} más` : '';
     return `✅ Material pagado · ${o.nombre || ''}\n${c.proveedor.nombre} ya está pagado:\n${lis}${mas}\n\nEntrega programada: ${fDateL(c.fechaEntrega)}.\nAl recibir, sube la foto de la remisión firmada en la plataforma.`;

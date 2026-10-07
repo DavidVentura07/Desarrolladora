@@ -134,6 +134,7 @@
     colado: ico('<path d="M3 17h11l3-5h3.5V17H20"/><path d="M5.5 17V9.5l7-2.5 1.5 4.5L6 14"/><circle cx="7" cy="18.5" r="1.8"/><circle cx="17" cy="18.5" r="1.8"/>'),
     sello: ico('<path d="M9.5 13.5V10a2.5 2.5 0 1 1 5 0v3.5"/><path d="M5 13.5h14l1 3.5H4z"/><path d="M6 20.5h12"/>'),
     llave: ico('<circle cx="8" cy="15" r="4"/><path d="M11 12l8.5-8.5M16.5 6.5l2 2M14.5 8.5l1.5 1.5"/>'),
+    imss: ico('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M19 8v6M16 11h6"/>'),
     logout: ico('<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>'),
     // Vistas del listado
     vCompactas: ico('<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>'),
@@ -1730,6 +1731,16 @@
   $('.loader-mark').innerHTML = markSVG();
   $('.curtain-mark').innerHTML = markSVG();
   $$('[data-ico]').forEach(el => { el.innerHTML = I[el.dataset.ico] || ''; });
+  // "Muy pronto" plegable (v0.10): cerrado por defecto para que la barra lateral quepa a 1280×800; recuerda cómo se dejó
+  const soon = $('.side-soon'), soonBtn = $('[data-soon]');
+  if (soon && soonBtn) {
+    const abrir = on => { soon.classList.toggle('open', on); soonBtn.setAttribute('aria-expanded', String(on)); };
+    try { abrir(localStorage.getItem('galitha.muyPronto') === '1'); } catch { abrir(false); }
+    soonBtn.addEventListener('click', () => {
+      const on = !soon.classList.contains('open'); abrir(on);
+      try { localStorage.setItem('galitha.muyPronto', on ? '1' : '0'); } catch { /* sin acceso */ }
+    });
+  }
   // Fecha de hoy en la barra superior ("Viernes, 2 de octubre de 2026"); se actualiza si la página queda abierta de un día a otro
   const pintarFecha = () => {
     const f = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });

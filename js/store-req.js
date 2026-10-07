@@ -107,6 +107,7 @@
       id: c.id, obraId: c.obra_id, anio: c.anio, semana: c.semana, requisicionId: '',
       iva: c.iva !== false,   // v0.8: sin IVA no lleva factura ni XML
       facturarA: c.facturar_a || '',   // v0.10: razón social a la que se factura (vacío = la predeterminada)
+      coladoId: c.colado_id || '',     // v0.11: compra de concreto o bombeo de un colado (no lleva materiales)
       proveedor: { nombre: str(prov.nombre), rfc: str(prov.rfc).toUpperCase(), razonSocial: str(prov.razonSocial), id: c.proveedor_id || '' },
       partidas: arr(c.compra_partidas).map(x => x.partida_id),
       fechaEntrega: fecha(c.fecha_entrega), entregas: obj(c.entregas), notas: str(c.notas),
@@ -133,13 +134,13 @@
   });
 
   /* ---------- Estado en memoria ---------- */
-  let db = { obras: [], requisiciones: [], compras: [], caja: [], fiscal: [], fiscalListo: false, config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
+  let db = { obras: [], requisiciones: [], compras: [], caja: [], fiscal: [], fiscalListo: false, colados: [], config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
 
   // Tablas nuevas de la v0.7: si aún no se corre 04-ajustes.sql, la app sigue funcionando sin ellas
   const opcional = q => q.then(r => (r.error ? { data: [], error: null } : r), () => ({ data: [], error: null }));
 
   async function cargar() {
-    const [, obras, reqs, compras, config, hist, avisos, caja, fiscal] = await Promise.all([
+    const [, obras, reqs, compras, config, hist, avisos, caja, fiscal, colados] = await Promise.all([
       window.Nube.recargarPerfiles(),   // nombres de residentes, suplentes y de quién hizo cada cosa
       sb().from('obras').select('*, obra_suplentes(*)').order('nombre'),
       sb().from('requisiciones').select('*, partidas(*)').order('anio', { ascending: false }).order('semana', { ascending: false }),
@@ -149,7 +150,9 @@
       opcional(sb().from('avisos').select('*').order('en', { ascending: false })),
       opcional(sb().from('caja_chica').select('*').order('creado_en')),
       // v0.10: si aún no se corre 07-datos-fiscales.sql, se usa la empresa de "Respaldo y datos"
-      sb().from('datos_fiscales').select('*').order('nombre').then(r => r, e => ({ data: null, error: e }))
+      sb().from('datos_fiscales').select('*').order('nombre').then(r => r, e => ({ data: null, error: e })),
+      // v0.11: datos mínimos de los colados para las compras que vienen de uno
+      opcional(sb().from('colados').select('id, obra_id, folio, fecha, hora, elemento, ubicacion, concretos, estado'))
     ]);
     const d = {
       obras: ok(obras).map(deObra),
@@ -158,6 +161,8 @@
       caja: ok(caja).map(deCaja),
       fiscal: fiscal.error ? [] : arr(fiscal.data).map(deFiscal),
       fiscalListo: !fiscal.error,
+      colados: ok(colados).map(k => ({ id: k.id, obraId: k.obra_id, folio: str(k.folio), fecha: fecha(k.fecha), hora: str(k.hora), elemento: str(k.elemento), ubicacion: str(k.ubicacion),
+        volumen: arr(k.concretos).reduce((a, x) => a + num(x.volumen), 0), estado: k.estado })),
       config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] }
     };
     ok(config).forEach(c => {
@@ -241,6 +246,9 @@
   /* ---------- API pública ---------- */
   window.StoreReq = {
     FORMATO, VERSION, uid, now,
+    // v0.11: sube un archivo a <obra>/<carpeta>/ (comprime fotos); la usa la programación de colados
+    subirArchivo: (obraId, carpeta, file) => subirArchivo(obraId, carpeta, file),
+    borrarArchivos: rutas => borrarArchivos(rutas),
     cargar,
     snapshot() { return clone(db); },
     vacio: () => !db.obras.length && !db.requisiciones.length && !db.compras.length,
@@ -336,7 +344,9 @@
         fecha_entrega: c.fechaEntrega || null, entregas: {}
       };
       if (c.facturarA) fila.facturar_a = c.facturarA;   // v0.10; sin elegir, la base pone la predeterminada
+      if (c.coladoId) fila.colado_id = c.coladoId;       // v0.11: compra de un colado
       ok(await sb().from('compras').insert(fila).select('id'));
+      if (!c.partidas || !c.partidas.length) return id;   // las de colado no llevan materiales
       try {
         ok(await sb().from('compra_partidas').insert(c.partidas.map(pid => ({ partida_id: pid, compra_id: id }))).select('partida_id'));
       } catch (e) {
@@ -360,7 +370,8 @@
       const c = find('compras', id);
       const filas = ok(await sb().from('compras').delete().eq('id', id).select('id'));
       if (!filas.length) throw new Error('Solo Dirección y el admin técnico pueden borrar compras.');
-      if (c) await borrarArchivos(c.documentos.flatMap(d => d.archivos.map(a => a.ruta)));
+      // Solo los archivos de la carpeta de esta compra (la cotización de un colado vive en la carpeta del colado)
+      if (c) await borrarArchivos(c.documentos.flatMap(d => d.archivos.map(a => a.ruta)).filter(r => r.includes(`/${id}/`)));
     },
 
     // Sube los archivos y registra el documento; si el registro falla, borra lo subido
@@ -378,6 +389,11 @@
         await borrarArchivos(subidos.map(s => s.ruta)).catch(() => {});
         throw e;
       }
+    },
+    // v0.11: registra un documento con archivos que ya están en la carpeta (la cotización elegida de un colado)
+    async agregarDocumentoExistente(compraId, tipo, { archivos = [], fecha: f, monto, datos } = {}) {
+      ok(await sb().from('compra_documentos').insert({ compra_id: compraId, tipo, archivos: arr(archivos).map(({ ruta, nombre }) => ({ ruta, nombre })),
+        fecha: f || null, monto: monto == null || monto === '' ? null : num(monto), datos: datos || {} }).select('id'));
     },
     // v0.10: agrega fotos a una remisión ya subida (compras o el residente de la obra)
     async agregarArchivos(docId, files) {
