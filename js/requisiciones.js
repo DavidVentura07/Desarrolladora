@@ -1436,8 +1436,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
       const renum = () => {
         $$('.prow', rows).forEach((x, i) => { x.querySelector('i').textContent = i + 1; });
         const n = $$('.prow', rows).length;
-        $('[data-cnt]', panel).textContent = `${n} de 30 renglones`;
-        $('[data-add]', panel).disabled = n >= 30;
+        $('[data-cnt]', panel).textContent = `${n} de ${MAX_PARTIDAS} renglones`;
+        $('[data-add]', panel).disabled = n >= MAX_PARTIDAS;
       };
       const tipoH = () => {
         const oid = form.obra.value, ww = semanaDe();
@@ -1464,7 +1464,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
         const mal = ps.find(p => !p.insumo || !(p.cantidad > 0));
         if (!ps.length || mal) { err.textContent = !ps.length ? 'Agrega al menos un material.' : `Falta insumo o cantidad en "${mal.insumo || 'un renglón'}".`; return; }
         if (!form.fsum.value) { err.textContent = 'Indica la fecha de suministro en obra.'; return; }
-        if (ps.length > 30) { err.textContent = 'El formato admite hasta 30 materiales.'; return; }
+        if (ps.length > MAX_PARTIDAS) { err.textContent = `Una requisición admite hasta ${MAX_PARTIDAS} materiales; el resto va en una extraordinaria.`; return; }
         const datos = nueva
           ? (() => {
             const o = obra(form.obra.value), ww = semanaDe(), tipo = form.tipo.value;
@@ -2058,6 +2058,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   /* =========================================================
      PDF (impresión) y Excel con el formato en papel
      ========================================================= */
+  // Tope de materiales por requisición (el formato en papel trae 30 renglones; el PDF y el Excel siguen en otra hoja)
+  const MAX_PARTIDAS = 60;
   const conFormato = r => r.partidas.filter(p => p.aprobacion !== 'rechazada');
   const filasFormato = r => { const ps = conFormato(r), out = []; for (let i = 0; i < Math.max(30, ps.length); i++) out.push(ps[i] || null); return out; };
   const tituloFormato = r => `REQUISICIÓN DE MATERIALES ${String((obra(r.obraId) || {}).nombre || '').toUpperCase()}${r.tipo === 'extraordinaria' ? ' (EXTRAORDINARIA)' : ''}`;
