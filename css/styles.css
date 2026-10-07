@@ -1625,8 +1625,51 @@ body.welcome-open { overflow: hidden; }
   .k-side { width: 100%; flex-direction: row; justify-content: space-between; align-items: center; }
 }
 
-/* v1.0: "Guardar y volver" en el detalle de la compra */
+/* v0.10: "Guardar y volver" en el detalle de la compra */
 .c-guardar { display: flex; align-items: center; justify-content: flex-end; gap: 14px; flex-wrap: wrap; margin: 4px 0 22px; }
 .c-guardar .muted { display: inline-flex; align-items: center; gap: 6px; }
 .c-guardar .muted svg { width: 14px; height: 14px; }
 @media (max-width: 900px) { .c-guardar { justify-content: stretch; } .c-guardar .btn { flex: 1; justify-content: center; } }
+
+/* v0.10 · Datos fiscales y fotos de la remisión */
+.solo-compras { display: none !important; }
+body[data-rol="direccion"] .solo-compras, body[data-rol="admin"] .solo-compras, body[data-rol="compras"] .solo-compras { display: flex !important; }
+.psel--fa { height: 38px; gap: 8px; }
+.psel--fa .fa-l { font-size: 11.5px; font-weight: 700; opacity: .75; }
+.psel--fa select { max-width: 300px; }
+.f-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.f-row .fchip { flex: 1; }
+.ibtn--xs { width: 30px; height: 30px; flex: none; }
+.ibtn--xs .ico { width: 14px; height: 14px; }
+.lbtn { padding: 0; border: 0; background: none; font: inherit; font-size: 12.5px; cursor: pointer; }
+.fcard { display: flex; flex-direction: column; gap: 14px; }
+.fcard .c-top { padding-right: 0; }
+.fcard .tagx { margin-left: auto; flex: none; }
+.dl--fis > div { grid-template-columns: 140px 1fr; padding: 8px 0; }
+.fcard .files { display: flex; flex-wrap: wrap; gap: 6px; }
+.fcard .c-bot { flex-wrap: wrap; justify-content: space-between; }
+.f-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.f-acts .tbtn { background: var(--surface); }
+@media (max-width: 900px) {
+  .psel--fa { max-width: 100%; }
+  .psel--fa select { max-width: 200px; }
+  .dl--fis > div { grid-template-columns: 110px 1fr; }
+}
+
+/* v0.10 · Caja chica parte 2: gráfica apilada, avisos y reporte semanal */
+.chart .bar--k { fill: var(--sun); }
+.chart .bar--k.cur { fill: var(--sun-deep); }
+.chart g.col:hover .bar--k { fill: var(--sun-ink, var(--sun-deep)); }
+.c-ley { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 2px 0 0; color: var(--muted); font-size: 11.5px; font-weight: 650; }
+.c-ley span { display: inline-flex; align-items: center; gap: 6px; }
+.ley { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: #9AAAE6; }
+.ley--k { background: var(--sun); }
+.k-aviso { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; color: var(--muted); font-size: 12px; font-weight: 600; }
+.k-aviso .ico { width: 14px; height: 14px; flex: none; color: var(--ok); }
+.k-rep { display: flex; gap: 6px; margin-left: auto; }
+.ogroup-h .k-rep + .btn--sm { margin-left: 0; }
+.pf td.r { text-align: right; }
+.pf tfoot td { border: 0; font-weight: 600; height: auto; padding: 2px 4px; }
+.pf tfoot tr.tt td { font-weight: 800; padding-top: 5px; }
+.pf .pf-n { margin: 6px 0 0; font-size: 7.5pt; }
+@media (max-width: 900px) { .ogroup-h:has(.k-rep) { flex-wrap: wrap; } .k-rep { margin-left: 0; } }

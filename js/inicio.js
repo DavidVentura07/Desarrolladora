@@ -86,7 +86,7 @@
             <div><b data-cnt="${c.proveedores}">0</b><small>Proveedores</small></div>
           </div>
         </div>
-        <div class="we-foot we-fx" style="--d:1100"><span>${nombre ? 'Hola, ' + esc(nombre) : ''}</span><span>v0.9 · en línea</span></div>
+        <div class="we-foot we-fx" style="--d:1100"><span>${nombre ? 'Hola, ' + esc(nombre) : ''}</span><span>v0.10 · en línea</span></div>
         <div class="we-ghost">${markSVG()}</div>
       </div>
       <div class="we-stage">

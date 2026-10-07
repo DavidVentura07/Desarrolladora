@@ -44,7 +44,8 @@
     clock: ico('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
     send: ico('<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>'),
     undo: ico('<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>'),
-    draft: ico('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>')
+    draft: ico('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>'),
+    fiscal: ico('<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="11" r="2.1"/><path d="M5.4 16.2c.6-1.6 1.7-2.4 3.1-2.4s2.5.8 3.1 2.4M14 10h4.5M14 13.5h3"/>')   // v0.10: datos fiscales
   });
   I.up = I.up || I.upload;
   const icoSz = (k, px) => I[k].replace('class="ico"', `class="ico" style="width:${px}px;height:${px}px"`);
@@ -142,7 +143,7 @@
   const req = id => D.requisiciones.find(r => r.id === id);
   const compra = id => (id ? D.compras.find(c => c.id === id) : null);
   // Los documentos se suben en cualquier orden (v0.7); el estado es el paso más alto que ya tiene.
-  // v1.0: el orden real es cotización → pago → factura (el proveedor factura después de cobrar) → remisión
+  // v0.10: el orden real es cotización → pago → factura (el proveedor factura después de cobrar) → remisión
   const compraEstado = c => (c.remision ? 'recibido' : c.factura ? 'facturado' : c.pago ? 'pagado' : 'cotizado');
   // Filtros del listado de compras (pueden coincidir: una compra recibida puede seguir sin factura)
   const FILTRO_EST = {
@@ -151,9 +152,9 @@
   };
   // Diferencias de montos o datos en una compra; se marcan en rojo (cuentan los centavos)
   const cent = v => Math.round((+v || 0) * 100);
+  // v0.10: el receptor del XML ya no va en rojo: se compara con Datos fiscales (ver receptor())
   function diferencias(c) {
-    const f = c.factura, out = [], emp = D.config.empresa || {};
-    if (f && emp.rfc && f.receptorRfc && f.receptorRfc !== emp.rfc) out.push({ doc: 'factura', txt: `La factura está a nombre de ${f.receptorRfc}, no de ${emp.nombre || 'la empresa'} (${emp.rfc}).` });
+    const f = c.factura, out = [];
     if (f && c.cotizacion && c.cotizacion.monto && cent(f.total) !== cent(c.cotizacion.monto)) {
       const d = (cent(f.total) - cent(c.cotizacion.monto)) / 100;
       out.push({ doc: 'factura', txt: `La factura (${money(f.total)}) no coincide con la cotización (${money(c.cotizacion.monto)}): ${money(Math.abs(d))} ${d > 0 ? 'más' : 'menos'}.` });
@@ -163,7 +164,43 @@
       const d = (cent(c.pago.monto) - cent(ref)) / 100;
       out.push({ doc: 'pago', txt: `El pago (${money(c.pago.monto)}) no coincide con ${f ? 'la factura' : 'la cotización'} (${money(ref)}): ${money(Math.abs(d))} ${d > 0 ? 'más' : 'menos'}.` });
     }
+    // v0.10: sin IVA, el monto de la nota o remisión del proveedor contra el pago (o la cotización si aún no se paga)
+    const nota = !c.iva && c.remision ? c.remision.monto : 0;
+    const refN = c.pago ? c.pago.monto : c.cotizacion ? c.cotizacion.monto : 0;
+    if (nota && refN && cent(nota) !== cent(refN)) {
+      const d = (cent(nota) - cent(refN)) / 100;
+      out.push({ doc: 'remision', txt: `La nota del proveedor (${money(nota)}) no coincide con ${c.pago ? 'el pago' : 'la cotización'} (${money(refN)}): ${money(Math.abs(d))} ${d > 0 ? 'más' : 'menos'}.` });
+    }
     return out;
+  }
+
+  /* ---------- Datos fiscales (v0.10): a qué razón social se factura ---------- */
+  // Sin 07-datos-fiscales.sql corrido, se usa la empresa de "Respaldo y datos"
+  const fiscales = () => (D.fiscalListo ? D.fiscal
+    : D.config.empresa.rfc ? [{ id: '', nombre: D.config.empresa.nombre, rfc: D.config.empresa.rfc, regimen: '', cp: '', usoCfdi: '', correo: '', notas: '', constancia: [], predeterminada: true }] : []);
+  const fiscalPred = () => fiscales().find(x => x.predeterminada) || null;
+  const fiscalRfc = rfc => (rfc ? fiscales().find(x => x.rfc === String(rfc).toUpperCase()) || null : null);
+  const facturarA = c => (c.facturarA ? D.fiscal.find(x => x.id === c.facturarA) || null : fiscalPred());
+  // Receptor del XML: 'ok' (a quien se pidió), 'otra' (otra razón registrada) o 'noreg' (RFC que no está en Datos fiscales)
+  function receptor(c) {
+    const f = c.factura;
+    if (!f || !f.receptorRfc) return null;
+    const pedida = facturarA(c), reg = fiscalRfc(f.receptorRfc);
+    if (!reg) return { tipo: 'noreg', rfc: f.receptorRfc, nombre: f.receptorNombre, pedida };
+    return { tipo: pedida && pedida.rfc !== reg.rfc ? 'otra' : 'ok', razon: reg, pedida };
+  }
+  const receptorTag = c => {
+    const x = receptor(c);
+    if (!x) return '';
+    if (x.tipo === 'noreg') return `<span class="tagx tagx--wait" title="${esc(x.nombre || '')} · ${esc(x.rfc)}">${I.alert}RFC no registrado</span>`;
+    return `<span class="tagx ${x.tipo === 'ok' ? 'tagx--ok' : 'tagx--wait'}" title="${x.tipo === 'otra' && x.pedida ? 'Se pidió a ' + esc(x.pedida.nombre) : esc(x.razon.rfc)}">${I.receipt}Facturado a: ${esc(x.razon.nombre)}</span>`;
+  };
+  // Texto para mandar al proveedor al pedirle la factura
+  const textoFiscal = x => [`Datos para facturar`, `Razón social: ${x.nombre}`, `RFC: ${x.rfc}`, x.regimen && `Régimen fiscal: ${x.regimen}`,
+    x.cp && `Código postal: ${x.cp}`, x.usoCfdi && `Uso de CFDI: ${x.usoCfdi}`, x.correo && `Enviar la factura (PDF y XML) a: ${x.correo}`].filter(Boolean).join('\n');
+  async function copiarFiscal(x) {
+    try { await navigator.clipboard.writeText(textoFiscal(x)); toast('Datos fiscales copiados: pégalos en el WhatsApp o correo del proveedor.'); }
+    catch { await api.preguntar({ titulo: 'Copiar datos fiscales', texto: 'Selecciona el texto y cópialo.', campo: 'area', valor: textoFiscal(x), ok: 'Listo' }); }
   }
   function estado(r, p) {
     if (r.estado === 'borrador') return 'borrador';
@@ -221,7 +258,7 @@
   /* ---------- Estado de la interfaz (por sesión) ---------- */
   const UI = Object.assign({ wk: null, obra: '', tipo: 'todas', cObra: '', cWk: '', cEst: 'todas', q: '', chObra: '' },
     (() => { try { return JSON.parse(sessionStorage.getItem('galitha.req.ui')) || {}; } catch { return {}; } })());
-  if (UI.cEst !== 'todas' && UI.cEst !== 'dif' && !FILTRO_EST[UI.cEst]) UI.cEst = 'todas';   // filtros de antes de la v1.0
+  if (UI.cEst !== 'todas' && UI.cEst !== 'dif' && !FILTRO_EST[UI.cEst]) UI.cEst = 'todas';   // filtros de antes de la v0.10
   const saveUI = () => { try { sessionStorage.setItem('galitha.req.ui', JSON.stringify(UI)); } catch { } };
   const curWk = () => UI.wk || hoyWk();
 
@@ -625,7 +662,7 @@
             ${varias ? `<label class="psel psel--sm${UI.chObra ? ' on' : ''}"><span class="sr">Obra de la gráfica</span><select data-rf="chObra"><option value="">Todas las obras</option>${obrasMias().map(o => `<option value="${esc(o.id)}"${UI.chObra === o.id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>` : ''}
           </header>
           <div class="panel-b"><div class="chart-grid"><div class="chart-wrap" data-chart></div><div class="chart-side" data-chart-side></div></div>
-          <p class="muted small chart-nota">Pagos registrados, agrupados por la semana de su requisición. Es la base del futuro control de erogaciones y avance de obra.</p></div>
+          <p class="muted small chart-nota">Pagos de compras (por la semana de su requisición) más los gastos de caja chica ya verificados por compras (por la semana del gasto). Es la base del futuro control de erogaciones y avance de obra.</p></div>
         </section>
 
         <div class="tools-top rv" style="--d:160">
@@ -668,12 +705,13 @@
     const o = obra(c.obraId) || {}, r = req(c.requisicionId);
     const mats = c.partidas.map(findPartida).filter(Boolean);
     const difs = diferencias(c), difEn = new Set(difs.map(x => x.doc));
-    const chipDe = { Factura: 'factura', XML: 'factura', Pago: 'pago' };
+    const chipDe = { Factura: 'factura', XML: 'factura', Pago: 'pago', Remisión: 'remision' };
+    const rec = receptor(c), fa = facturarA(c), pred = fiscalPred();
     return `<article class="card lcard ccard rv${difs.length ? ' ccard--dif' : ''}" style="--d:${d}" data-href="#/c/${esc(c.id)}" tabindex="0">
       <div class="l-id">
         <span class="av ${tono(c.proveedor.nombre)}">${esc(iniciales(c.proveedor.nombre))}</span>
         <div class="c-id"><a class="pname" href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>
-          <span class="sub">${esc(o.nombre || '')}${c.factura && c.factura.folio ? ' · ' + esc((c.factura.serie || '') + ' ' + c.factura.folio) : ''}</span></div>
+          <span class="sub">${esc(o.nombre || '')}${c.factura && c.factura.folio ? ' · ' + esc((c.factura.serie || '') + ' ' + c.factura.folio) : ''}${c.iva && fa && pred && fa.id !== pred.id ? ' · a ' + esc(fa.nombre) : ''}</span></div>
       </div>
       <div class="l-mid">
         <p class="w-serv c-mats">${mats.slice(0, 3).map(p => `${esc(p.insumo)} <span class="muted">(${qty(p.cantidad)} ${esc(p.unidad)})</span>`).join(' · ')}${mats.length > 3 ? ` <span class="muted">y ${mats.length - 3} más</span>` : ''}</p>
@@ -681,7 +719,7 @@
         ${difs.length ? `<p class="dif-l">${I.alert}<span>${esc(difs[0].txt)}${difs.length > 1 ? ` <b>(+${difs.length - 1} más)</b>` : ''}</span></p>` : ''}
         <span class="muted small">${r ? 'Requisición ' + esc(r.folio) + ' · ' : ''}${c.partidas.length} materiales · entrega ${esc(fDate(c.fechaEntrega))}</span>
       </div>
-      <div class="c-total"><b>${money(montoCompra(c))}</b>${c.partidas.length ? '' : '<span class="tagx tagx--vacia" title="Se quitaron todos sus materiales; si era de prueba, bórrala">Sin materiales</span>'}${c.iva ? '' : '<span class="tagx tagx--siniva">Sin IVA</span>'}${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
+      <div class="c-total"><b>${money(montoCompra(c))}</b>${c.partidas.length ? '' : '<span class="tagx tagx--vacia" title="Se quitaron todos sus materiales; si era de prueba, bórrala">Sin materiales</span>'}${c.iva ? '' : '<span class="tagx tagx--siniva">Sin IVA</span>'}${difs.length ? `<span class="tagx tagx--bad tagx--dif">${I.alert}Diferencia</span>` : ''}${rec && rec.tipo !== 'ok' ? receptorTag(c) : ''}${st(compraEstado(c), true)}<small>${c.factura ? 'Total facturado' : 'Total cotizado'}</small></div>
     </article>`;
   }
 
@@ -696,20 +734,26 @@
     const hw = hoyWk();
     const obraF = UI.chObra;
     const cs = D.compras.filter(c => c.pago && visibleObra(c.obraId) && (!obraF || c.obraId === obraF));
-    if (!cs.length) { el.innerHTML = '<p class="muted">Aún no hay pagos registrados.</p>'; side.innerHTML = ''; return; }
-    const min = Math.min(...cs.map(wkKey)), max = Math.max(wkKey(hw), ...cs.map(wkKey));
+    // v0.10: caja chica ya verificada por compras (o reembolsada), en la semana del gasto
+    const ks = D.caja.filter(k => ['verificado', 'reembolsado'].includes(k.estado) && visibleObra(k.obraId) && (!obraF || k.obraId === obraF));
+    if (!cs.length && !ks.length) { el.innerHTML = '<p class="muted">Aún no hay pagos registrados.</p>'; side.innerHTML = ''; return; }
+    const claves = [...cs, ...ks].map(wkKey);
+    const min = Math.min(...claves), max = Math.max(wkKey(hw), ...claves);
     const data = [];
     for (let w = { anio: Math.floor(min / 100), semana: min % 100 }; wkKey(w) <= max && data.length < 60; w = wkAdd(w, 1)) {
-      const xs = cs.filter(c => wkKey(c) === wkKey(w));
-      data.push({ w, total: xs.reduce((a, c) => a + c.pago.monto, 0), n: xs.length });
+      const xs = cs.filter(c => wkKey(c) === wkKey(w)), kx = ks.filter(k => wkKey(k) === wkKey(w));
+      const comp = xs.reduce((a, c) => a + c.pago.monto, 0), caja = kx.reduce((a, k) => a + k.monto, 0);
+      data.push({ w, comp, caja, total: comp + caja, n: xs.length, nk: kx.length });
     }
-    const tot = data.reduce((a, x) => a + x.total, 0);
+    const tot = data.reduce((a, x) => a + x.total, 0), totK = data.reduce((a, x) => a + x.caja, 0);
     const top = data.reduce((a, x) => (x.total > a.total ? x : a), data[0]);
     const conPago = data.filter(x => x.total > 0).length;
     side.innerHTML = `<div class="stats4">
       <div><small>Acumulado</small><b>${money(tot)}</b></div>
-      <div><small>Promedio por semana con pagos</small><b>${money(conPago ? tot / conPago : 0)}</b></div>
-      <div><small>Semana más alta</small><b>S${top.w.semana} · ${moneyK(top.total)}</b></div></div>`;
+      <div><small>Promedio por semana con gasto</small><b>${money(conPago ? tot / conPago : 0)}</b></div>
+      <div><small>Semana más alta</small><b>S${top.w.semana} · ${moneyK(top.total)}</b></div>
+      <div><small>De caja chica</small><b>${money(totK)}${tot ? ` <span class="muted">· ${Math.round(totK / tot * 100)}%</span>` : ''}</b></div></div>
+      <p class="c-ley"><span><i class="ley ley--c"></i>Compras pagadas</span><span><i class="ley ley--k"></i>Caja chica verificada</span></p>`;
 
     const draw = () => {
       const W = Math.max(260, el.clientWidth || 600), H = 220, L = 54, Rm = 6, T = 24, B = 26;
@@ -719,10 +763,17 @@
       const y = v => T + ih - (v / ymax) * ih;
       const grid = []; for (let v = 0; v <= ymax + 1; v += step) grid.push(v);
       const every = band < 34 ? Math.ceil(34 / band) : 1;
+      // Segmento de barra de y1 (abajo) a y0 (arriba); solo el de arriba lleva esquinas redondeadas
+      const seg = (cls, x0, y0, y1, redondo) => {
+        if (y1 - y0 <= 0) return '';
+        const rr = redondo ? Math.min(4, y1 - y0, bw / 2) : 0;
+        return `<path class="${cls}" d="M${x0} ${y1}V${y0 + rr}Q${x0} ${y0} ${x0 + rr} ${y0}H${x0 + bw - rr}Q${x0 + bw} ${y0} ${x0 + bw} ${y0 + rr}V${y1}Z"/>`;
+      };
       const bars = data.map((x, i) => {
-        const cx = L + band * i + band / 2, h = Math.max(0, T + ih - y(x.total)), x0 = cx - bw / 2, y0 = T + ih - h, rr = Math.min(4, h, bw / 2);
+        const cx = L + band * i + band / 2, h = Math.max(0, T + ih - y(x.total)), x0 = cx - bw / 2, y0 = T + ih - h;
         const cur = wkKey(x.w) === wkKey(hw);
-        const path = h > 0 ? `<path class="bar${cur ? ' cur' : ''}" d="M${x0} ${T + ih}V${y0 + rr}Q${x0} ${y0} ${x0 + rr} ${y0}H${x0 + bw - rr}Q${x0 + bw} ${y0} ${x0 + bw} ${y0 + rr}V${T + ih}Z"/>` : '';
+        const yC = y(x.comp);   // tope de compras; caja chica va encima
+        const path = seg(`bar${cur ? ' cur' : ''}`, x0, yC, T + ih, !x.caja) + seg(`bar bar--k${cur ? ' cur' : ''}`, x0, y0, yC, true);
         const lab = (x === top || cur) && x.total > 0 ? `<text class="lbl" x="${cx}" y="${y0 - 6}" text-anchor="middle">${moneyK(x.total)}</text>` : '';
         const xl = i % every === 0 || cur ? `<text x="${cx}" y="${H - 8}" text-anchor="middle"${cur ? ' class="cur"' : ''}>S${x.w.semana}</text>` : '';
         return `<g class="col" data-i="${i}">${path}${lab}<g class="ax">${xl}</g><rect class="hit" x="${L + band * i}" y="${T}" width="${band}" height="${ih}"/></g>`;
@@ -735,7 +786,7 @@
       $$('g.col', el).forEach(g => {
         g.addEventListener('mouseenter', () => {
           const i = +g.dataset.i, x = data[i], cx = L + band * i + band / 2;
-          tip.innerHTML = `<small>Semana ${x.w.semana} · ${esc(wkRange(x.w))}</small><b>${money(x.total)}</b><small>${x.n} ${x.n === 1 ? 'pago' : 'pagos'}</small>`;
+          tip.innerHTML = `<small>Semana ${x.w.semana} · ${esc(wkRange(x.w))}</small><b>${money(x.total)}</b><small>Compras: ${money(x.comp)} · ${x.n} ${x.n === 1 ? 'pago' : 'pagos'}</small>${x.caja ? `<br><small>Caja chica: ${money(x.caja)} · ${x.nk} ${x.nk === 1 ? 'gasto' : 'gastos'}</small>` : ''}`;
           tip.style.left = Math.min(Math.max(cx, 90), W - 90) + 'px'; tip.style.top = Math.max(y(x.total), T + 30) + 'px'; tip.classList.add('on');
         });
         g.addEventListener('mouseleave', () => tip.classList.remove('on'));
@@ -771,6 +822,11 @@
     const res = o.residente || {};
     const recibida = !!c.remision;
     const puedeQuitar = () => esCompras();   // v0.7: compras también quita o reemplaza el comprobante de pago
+    const fa = facturarA(c), rec = receptor(c);
+    // v0.10: a qué razón social se factura (compras lo cambia; los demás lo ven)
+    const selFa = c.iva && D.fiscalListo && D.fiscal.length && esCompras()
+      ? `<label class="psel psel--fa${fa ? ' on' : ''}"><span class="fa-l">Facturar a</span><select data-fa aria-label="Razón social a la que se factura">${fa ? '' : '<option value="">Elige…</option>'}${D.fiscal.map(x => `<option value="${esc(x.id)}"${fa && fa.id === x.id ? ' selected' : ''}>${esc(x.nombre)} · ${esc(x.rfc)}</option>`).join('')}</select></label>
+        ${fa ? `<button class="tbtn tbtn--sm" type="button" data-copiar-fa title="Para mandárselos al proveedor">${I.copy}<span>Copiar datos fiscales</span></button>` : ''}` : '';
 
     const doc = (n, titulo, sub, d, cuerpo, accion, tipo) => `<div class="doc rv${d && difEn.has(tipo) ? ' dif' : d ? ' ok' : next === n ? ' next' : ''}" style="--d:${60 + n * 40}">
       <div class="doc-h"><span class="doc-n">${d && difEn.has(tipo) ? icoSz('alert', 17) : d ? icoSz('check', 16) : n}</span><div><h3>${titulo}</h3><small>${d && difEn.has(tipo) ? '<b class="doc-dif">Diferencia en el monto o los datos</b>' : sub}</small></div>
@@ -792,20 +848,26 @@
           <div class="d-top">
             <span class="av av--xl ${tono(c.proveedor.nombre)}">${esc(iniciales(c.proveedor.nombre))}</span>
             <div class="d-title">
-              <div class="d-tags">${st(e)}${difs.length ? ` <span class="tagx tagx--bad">${I.alert}Con diferencias</span>` : ''}${f && f.uuid ? ' <span class="tagx tagx--ok">' + I.xml + 'XML leído</span>' : ''}</div>
+              <div class="d-tags">${st(e)}${difs.length ? ` <span class="tagx tagx--bad">${I.alert}Con diferencias</span>` : ''}${f && f.uuid ? ' <span class="tagx tagx--ok">' + I.xml + 'XML leído</span>' : ''}${rec ? ' ' + receptorTag(c) : ''}</div>
               <h1 class="title title--d">${esc(c.proveedor.nombre)}</h1>
               <p class="d-sub">${c.proveedor.rfc ? `<span class="mono">${esc(c.proveedor.rfc)}</span>` : ''}<span>${esc(o.nombre || '')}</span><span>Semana ${c.semana}</span>
                 ${r ? `<a class="link-u" href="#/r/${esc(r.id)}">Requisición ${esc(r.folio)}</a>` : ''}
-                ${dir ? `<a class="link-u" href="#/p/${encodeURIComponent(dir.id)}">${I.users}Ficha en el directorio</a>` : '<span class="muted">No está en el directorio</span>'}</p>
+                ${dir ? `<a class="link-u" href="#/p/${encodeURIComponent(dir.id)}">${I.users}Ficha en el directorio</a>` : '<span class="muted">No está en el directorio</span>'}
+                ${c.iva && fa && !selFa ? `<span>Facturar a <b>${esc(fa.nombre)}</b></span>` : ''}</p>
             </div>
             <div class="d-money"><div class="big-money">${money(montoCompra(c))}</div><small>${f ? 'Total facturado (IVA incluido)' : 'Total de la cotización'}</small></div>
           </div>
         </header>
 
         ${difs.length ? `<div class="note note--bad rv" style="--d:50" role="alert">${I.alert}<p><b>${difs.length === 1 ? 'Hay una diferencia' : 'Hay ' + difs.length + ' diferencias'} en esta compra.</b> Revísala con el proveedor antes de pagar o archivar.<br>${difs.map(x => esc(x.txt)).join('<br>')}</p></div>` : ''}
+        ${rec && rec.tipo === 'noreg' ? `<div class="note note--warn rv" style="--d:48">${I.alert}<p><b>La factura está a nombre de un RFC que no está en Datos fiscales:</b> ${esc(rec.nombre || '')} <span class="mono">${esc(rec.rfc)}</span>.${rec.pedida ? ` Se pidió a ${esc(rec.pedida.nombre)} (${esc(rec.pedida.rfc)}).` : ''} Si es una razón social de la empresa, agrégala; si no, pide al proveedor que la corrija.
+          ${esCompras() && D.fiscalListo ? `<br><button class="btn btn--sm" type="button" data-agregar-fiscal>${I.plus}<span>Agregar a datos fiscales</span></button>` : ''}</p></div>`
+          : rec && rec.tipo === 'otra' ? `<div class="note note--warn rv" style="--d:48">${I.alert}<p><b>Se facturó a ${esc(rec.razon.nombre)}</b> (${esc(rec.razon.rfc)}), pero se pidió a ${esc(rec.pedida.nombre)}. Si así se acordó, cambia "Facturar a".
+          ${selFa ? `<br><button class="btn btn--sm" type="button" data-fa-usar="${esc(rec.razon.id)}">${I.check}<span>Facturar a ${esc(rec.razon.nombre)}</span></button>` : ''}</p></div>` : ''}
         ${mats.length ? '' : `<div class="note note--bad rv" style="--d:45">${I.alert}<p><b>Esta compra ya no tiene materiales.</b> Sus documentos y su pago siguen contando en los totales. Si era de prueba o ya no aplica, ${esAdmin() ? 'usa <b>Borrar compra</b>.' : 'pide al admin técnico que la borre.'}</p></div>`}
         ${esCompras() || esAdmin() ? `<div class="c-acts rv" style="--d:40">
           ${esCompras() ? `<div class="seg" role="group" aria-label="IVA de la compra"><button type="button" data-iva="1" aria-pressed="${c.iva}">Con IVA</button><button type="button" data-iva="0" aria-pressed="${!c.iva}">Sin IVA</button></div>` : ''}
+          ${selFa}
           ${esAdmin() ? `<button class="tbtn tbtn--sm" type="button" data-mover-c>${I.left}<span>Mover de semana</span></button>
             <button class="tbtn tbtn--sm c-borrar" type="button" data-borrar-c>${I.trash}<span>Borrar compra</span></button>` : ''}
         </div>` : ''}
@@ -820,9 +882,13 @@
             f ? `<div class="files">${fch('file', f.pdfArchivo, 'PDF') || sinArch('Falta el PDF')}${fch('xml', f.xmlArchivo, 'XML')}</div>
               <p class="dmeta">Folio <b>${esc((f.serie || '') + ' ' + f.folio)}</b> · ${esc(fDate(f.fecha))}${f.uuid ? `<br>UUID <span class="mono">${esc(f.uuid.slice(0, 8))}…</span>` : ''}</p>` : '',
             !f ? (esCompras() ? drop('xml', 'Subir XML y PDF', 'xml') : lock('Compras sube la factura.')) : '', 'factura')}
-          ${doc(4, 'Remisión firmada', 'Una o varias fotos desde la obra', c.remision,
-            c.remision ? `<div class="files">${archivosDe(c.remision, 'camera', 'FOTO')}</div><p class="dmeta">Recibió <b>${esc(c.remision.recibio)}</b> · ${esc(fDate(c.remision.fecha))}</p>` : '',
-            !c.remision ? (puedeRemision(c.obraId) ? drop('rem', 'Subir fotos de la remisión', 'camera') : lock('El residente sube la remisión.')) : '', 'remision')}
+          ${doc(4, 'Remisión firmada', c.iva ? 'Una o varias fotos desde la obra' : 'Fotos y el total de la nota del proveedor', c.remision,
+            c.remision ? `<div class="files">${c.remision.archivos.length ? c.remision.archivos.map(a => esCompras() && c.remision.archivos.length > 1
+                ? `<div class="f-row">${fch('camera', a, 'FOTO')}<button type="button" class="ibtn ibtn--xs" data-quitar-arch="${esc(a.ruta)}" title="Quitar esta foto" aria-label="Quitar ${esc(a.nombre)}">${I.close}</button></div>` : fch('camera', a, 'FOTO')).join('') : sinArch('Sin archivo')}</div>
+              <p class="dmeta">Recibió <b>${esc(c.remision.recibio)}</b> · ${esc(fDate(c.remision.fecha))}${c.remision.archivos.length > 1 ? ` · ${c.remision.archivos.length} fotos` : ''}</p>
+              ${c.iva ? '' : `<p class="dmeta">${c.remision.monto ? `Nota del proveedor: <b>${money(c.remision.monto)}</b>` : '<span class="muted">Sin el total de la nota</span>'}${esCompras() ? ` <button type="button" class="link-u lbtn" data-nota-monto>${c.remision.monto ? 'Corregir' : 'Capturar'}</button>` : ''}</p>`}` : '',
+            !c.remision ? (puedeRemision(c.obraId) ? drop('rem', 'Subir fotos de la remisión', 'camera') : lock('El residente sube la remisión.'))
+              : puedeRemision(c.obraId) ? drop('rem+', 'Agregar fotos', 'camera') : '', 'remision')}
         </div>
         ${esCompras() || puedeRemision(c.obraId) ? `<div class="c-guardar rv" style="--d:240"><span class="muted small">${I.check}Cada documento se guarda en cuanto termina de subir.</span><button type="button" class="btn btn--solid" data-guardar>${I.check}<span>Guardar y volver</span></button></div>` : ''}
 
@@ -888,7 +954,32 @@
           b.addEventListener('click', () => subir(c.id, k));
           b.addEventListener('dragover', ev => { ev.preventDefault(); b.classList.add('over'); });
           b.addEventListener('dragleave', () => b.classList.remove('over'));
-          b.addEventListener('drop', ev => { ev.preventDefault(); b.classList.remove('over'); const fls = ev.dataTransfer.files; if (fls.length) recibirArchivo(c.id, k, k === 'rem' ? [...fls] : fls[0]); });
+          b.addEventListener('drop', ev => { ev.preventDefault(); b.classList.remove('over'); const fls = ev.dataTransfer.files; if (fls.length) recibirArchivo(c.id, k, k === 'rem' || k === 'rem+' ? [...fls] : fls[0]); });
+        });
+        // v0.10: a qué razón social se factura
+        const sfa = $('[data-fa]', sec);
+        if (sfa) sfa.addEventListener('change', async () => {
+          const x = D.fiscal.find(y => y.id === sfa.value);
+          if (x && await hacer(() => R.actualizarCompra(c.id, { facturarA: x.id }), `Esta compra se factura a ${x.nombre}.`)) api.rerender();
+        });
+        const fu = $('[data-fa-usar]', sec);
+        if (fu) fu.addEventListener('click', async () => {
+          const x = D.fiscal.find(y => y.id === fu.dataset.faUsar);
+          if (x && await hacer(() => R.actualizarCompra(c.id, { facturarA: x.id }), `Esta compra se factura a ${x.nombre}.`)) api.rerender();
+        });
+        const cfa = $('[data-copiar-fa]', sec);
+        if (cfa) cfa.addEventListener('click', () => copiarFiscal(fa));
+        const af = $('[data-agregar-fiscal]', sec);
+        if (af) af.addEventListener('click', () => drFiscal(null, { nombre: f.receptorNombre, rfc: f.receptorRfc, regimen: f.regimenReceptor || '', cp: f.cpReceptor || '', usoCfdi: f.usoCfdi || '' }, c.id));
+        $$('[data-quitar-arch]', sec).forEach(b => b.addEventListener('click', async () => {
+          if (!(await api.confirmar({ titulo: 'Quitar foto', texto: 'Se borrará esta foto de la remisión. Las demás se quedan.', ok: 'Quitar', peligro: true }))) return;
+          if (await hacer(() => R.quitarArchivo(c.remision.docId, b.dataset.quitarArch), 'Foto quitada.')) api.rerender();
+        }));
+        const nm = $('[data-nota-monto]', sec);
+        if (nm) nm.addEventListener('click', async () => {
+          const m = await api.preguntar({ titulo: 'Total de la nota del proveedor', texto: 'Se compara con el pago (o la cotización si aún no se paga). Déjalo vacío si la nota no trae total.', etiqueta: 'Total de la nota', campo: 'numero', valor: c.remision.monto ? String(c.remision.monto) : '' });
+          if (m == null) return;
+          if (await hacer(() => R.actualizarDocumento(c.remision.docId, { monto: m === '' ? null : parseFloat(m) || null }), 'Total de la nota guardado.')) api.rerender();
         });
         $$('[data-ruta]', sec).forEach(b => b.addEventListener('click', () => abrirArchivo(b.dataset.ruta)));
         // Todo ya se guarda solo; el botón da la confirmación (espera la subida en curso) y regresa al listado
@@ -952,8 +1043,10 @@
   const forma = m => ({ '01': 'Efectivo', '02': 'Cheque', '03': 'Transferencia', '04': 'Tarjeta de crédito', '28': 'Tarjeta de débito', '99': 'Por definir' }[m] || m || '—');
 
   function validar(c) {
-    const f = c.factura, out = [], emp = D.config.empresa;
-    if (emp.rfc) out.push(f.receptorRfc === emp.rfc ? ['ok', `A nombre de ${emp.nombre || 'la empresa'} (${emp.rfc}).`] : ['no', `El receptor es ${f.receptorRfc || 'desconocido'}, no ${emp.rfc}.`]);
+    const f = c.factura, out = [], x = receptor(c);
+    if (x) out.push(x.tipo === 'ok' ? ['ok', `A nombre de ${x.razon.nombre} (${x.razon.rfc}), como se pidió.`]
+      : x.tipo === 'otra' ? ['meh', `A nombre de ${x.razon.nombre} (${x.razon.rfc}); se pidió a ${x.pedida.nombre}.`]
+      : ['meh', `El receptor ${x.nombre ? x.nombre + ' ' : ''}(${x.rfc}) no está en Datos fiscales.`]);
     if (f.uuid) out.push(['ok', 'UUID único: el servidor no permite registrar la misma factura dos veces.']);
     if (c.cotizacion && c.cotizacion.monto) {
       const d = Math.round((f.total - c.cotizacion.monto) * 100) / 100;
@@ -975,11 +1068,12 @@
     if (k === 'xml') return drXml(cid);
     const fp = $('#filepick');
     fp.value = '';
-    fp.accept = k === 'rem' ? 'image/*,application/pdf' : 'application/pdf,image/*';
-    // v1.0: la remisión admite varias fotos (hojas o evidencia); sin 'capture' el celular deja elegir cámara o fototeca
+    const rem = k === 'rem' || k === 'rem+';   // rem+: fotos que se agregan a una remisión ya subida
+    fp.accept = rem ? 'image/*,application/pdf' : 'application/pdf,image/*';
+    // v0.10: la remisión admite varias fotos (hojas o evidencia); sin 'capture' el celular deja elegir cámara o fototeca
     fp.removeAttribute('capture');
-    fp.multiple = k === 'rem';
-    fp.onchange = () => { if (fp.files.length) recibirArchivo(cid, k, k === 'rem' ? [...fp.files] : fp.files[0]); };
+    fp.multiple = rem;
+    fp.onchange = () => { if (fp.files.length) recibirArchivo(cid, k, rem ? [...fp.files] : fp.files[0]); };
     fp.click();
   }
   let subiendo = null;   // subida en curso ("Guardar y volver" la espera)
@@ -988,6 +1082,15 @@
     file = files[0];
     if (k === 'xml' || /\.xml$/i.test(file.name)) return drXml(cid, file);
     const c = compra(cid); if (!c) return;
+    if (k === 'rem+') {
+      if (!c.remision) return;
+      toast(files.length > 1 ? `Subiendo ${files.length} fotos…` : `Subiendo "${file.name}"…`);
+      subiendo = hacer(() => R.agregarArchivos(c.remision.docId, files), files.length > 1 ? `${files.length} fotos agregadas a la remisión.` : 'Foto agregada a la remisión.');
+      const ok = await subiendo;
+      subiendo = null;
+      if (ok) api.rerender();
+      return;
+    }
     let datos = {}, monto = null, referencia = '';
     if (k === 'cot') {
       const m = await api.preguntar({ titulo: 'Total de la cotización', texto: esc(file.name), etiqueta: 'Total con IVA', campo: 'numero', ok: 'Subir', requerido: true });
@@ -999,7 +1102,15 @@
       if (m == null) return;
       monto = parseFloat(m) || 0; referencia = 'Transferencia';
     }
-    if (k === 'rem') datos = { recibio: yo() };
+    if (k === 'rem') {
+      datos = { recibio: yo() };
+      // v0.10: sin IVA no hay factura; el total de la nota del proveedor se compara con el pago y la cotización
+      if (!c.iva) {
+        const m = await api.preguntar({ titulo: 'Total de la nota del proveedor', texto: 'Si la nota o remisión trae el total, escríbelo para compararlo con la cotización y el pago. Si no lo trae, déjalo vacío.', etiqueta: 'Total de la nota', campo: 'numero', ok: 'Subir fotos' });
+        if (m == null) return;
+        monto = m === '' ? null : parseFloat(m) || null;
+      }
+    }
     const tipo = { cot: 'cotizacion', pago: 'pago', rem: 'remision' }[k];
     toast(files.length > 1 ? `Subiendo ${files.length} archivos…` : `Subiendo "${file.name}"…`);
     subiendo = hacer(() => R.agregarDocumento(cid, tipo, { archivos: files, fecha: today(), monto, referencia, datos }));
@@ -1039,6 +1150,7 @@
       serie: a(c, 'Serie'), folio: a(c, 'Folio'), fecha: a(c, 'Fecha'), subtotal: n(a(c, 'SubTotal')), total: n(a(c, 'Total')), moneda: a(c, 'Moneda'),
       formaPago: a(c, 'FormaPago'), metodoPago: a(c, 'MetodoPago'), tipo: a(c, 'TipoDeComprobante'), version: a(c, 'Version'),
       emisorRfc: a(e, 'Rfc'), emisorNombre: a(e, 'Nombre'), receptorRfc: a(r, 'Rfc'), receptorNombre: a(r, 'Nombre'), usoCfdi: a(r, 'UsoCFDI'),
+      regimenReceptor: a(r, 'RegimenFiscalReceptor'), cpReceptor: a(r, 'DomicilioFiscalReceptor'),   // CFDI 4.0 (v0.10: para Datos fiscales)
       uuid: a(t, 'UUID').toUpperCase(),
       conceptos: [...doc.getElementsByTagNameNS('*', 'Concepto')].map(k => ({ cantidad: n(a(k, 'Cantidad')), unidad: a(k, 'Unidad') || a(k, 'ClaveUnidad'), descripcion: a(k, 'Descripcion').replace(/\s+/g, ' ').trim(), valorUnitario: n(a(k, 'ValorUnitario')), importe: n(a(k, 'Importe')) }))
     };
@@ -1089,11 +1201,10 @@
         file.text().then(t => {
           try { parsed = parseCFDI(t); } catch (x) { parsed = null; res.innerHTML = `<p class="warn">${I.alert}${esc(x.message)}</p>`; upd(); return; }
           const dup = D.compras.find(c => c.factura && c.factura.uuid && c.factura.uuid === parsed.uuid);
-          const emp = D.config.empresa;
-          const rfcOk = !emp.rfc || parsed.receptorRfc === emp.rfc;
+          const reg = fiscalRfc(parsed.receptorRfc);   // v0.10: se compara con Datos fiscales
           res.innerHTML = `<ul class="checks">
               <li class="ok">${I.okc}<span>CFDI ${esc(parsed.version)} leído: ${parsed.conceptos.length} conceptos.</span></li>
-              ${emp.rfc ? `<li class="${rfcOk ? 'ok' : 'no'}">${I[rfcOk ? 'okc' : 'x']}<span>${rfcOk ? 'A nombre de ' + esc(emp.nombre || emp.rfc) : 'El receptor (' + esc(parsed.receptorRfc) + ') no es ' + esc(emp.rfc)}</span></li>` : ''}
+              ${fiscales().length ? `<li class="${reg ? 'ok' : 'meh'}">${I[reg ? 'okc' : 'alert']}<span>${reg ? 'A nombre de ' + esc(reg.nombre) + ' (registrada en Datos fiscales)' : 'El receptor ' + esc(parsed.receptorNombre) + ' (' + esc(parsed.receptorRfc) + ') no está en Datos fiscales; se puede agregar después desde la compra.'}</span></li>` : ''}
               <li class="${dup ? 'no' : 'ok'}">${I[dup ? 'x' : 'okc']}<span>${dup ? 'Este UUID ya está registrado (' + esc(dup.proveedor.nombre) + ', S' + dup.semana + ').' : 'UUID nuevo.'}</span></li>
             </ul>
             <dl class="dl dl--fac">
@@ -1146,6 +1257,7 @@
           <label class="fld fld--wide"><span class="fld-l">Proveedor <em>*</em></span><input class="in" name="prov" list="dl-prov" required placeholder="Escribe o elige del directorio"><datalist id="dl-prov">${nombres.map(n => `<option value="${esc(n)}">`).join('')}</datalist></label>
           <label class="fld"><span class="fld-l">Total con IVA <em>*</em></span><input class="in" name="monto" type="number" min="0" step="0.01" required></label>
           <label class="fld"><span class="fld-l">Entrega programada</span><input class="in" name="ent" type="date" value="${esc(rr.fechaSuministro)}"><span class="fld-h">Para toda la factura; se puede ajustar por material.</span></label>
+          ${D.fiscalListo && D.fiscal.length > 1 ? `<label class="fld fld--wide"><span class="fld-l">Facturar a</span><select class="in" name="fa">${D.fiscal.map(x => `<option value="${esc(x.id)}"${x.predeterminada ? ' selected' : ''}>${esc(x.nombre)} · ${esc(x.rfc)}</option>`).join('')}</select><span class="fld-h">Razón social que le darás al proveedor para la factura. Se puede cambiar en la compra.</span></label>` : ''}
           <label class="fld fld--wide"><span class="fld-l">Archivo de la cotización (PDF o foto)</span><input class="in" name="arch" type="file" accept="application/pdf,image/*"></label>
         </div></div></fieldset>
         <fieldset class="fs"><legend><span class="mono">2</span>Materiales incluidos</legend><div class="fs-b">
@@ -1168,7 +1280,8 @@
           cid = await R.crearCompra({
             obraId: rr.obraId, anio: rr.anio, semana: rr.semana, partidas: ps.map(p => p.id),
             proveedor: { nombre: prov, rfc: p0 ? p0.rfc : '', razonSocial: p0 ? p0.razonSocial : '', id: p0 ? p0.id : '' },
-            fechaEntrega: form.ent.value || rr.fechaSuministro
+            fechaEntrega: form.ent.value || rr.fechaSuministro,
+            facturarA: form.fa ? form.fa.value : ''   // vacío: la base pone la predeterminada
           });
           await cargar();
           await R.agregarDocumento(cid, 'cotizacion', { archivos: form.arch.files[0] ? [form.arch.files[0]] : [], fecha: today(), monto });
@@ -1403,6 +1516,114 @@
     };
   }
 
+  /* =========================================================
+     DATOS FISCALES (v0.10): razones sociales a las que se factura
+     Todos las consultan; Dirección, el admin técnico y compras las editan.
+     ========================================================= */
+  const REGIMENES = { '601': 'General de Ley Personas Morales', '603': 'Personas Morales con Fines no Lucrativos', '605': 'Sueldos y Salarios', '606': 'Arrendamiento',
+    '612': 'Personas Físicas con Actividades Empresariales y Profesionales', '621': 'Incorporación Fiscal', '625': 'Plataformas Tecnológicas', '626': 'Régimen Simplificado de Confianza' };
+  const USOS = { G01: 'Adquisición de mercancías', G03: 'Gastos en general', I01: 'Construcciones', I02: 'Mobiliario y equipo de oficina', I08: 'Otra maquinaria y equipo', S01: 'Sin efectos fiscales' };
+  const conNombre = (cat, v) => { const k = String(v || '').trim().toUpperCase(); return cat[k] ? `${k} · ${cat[k]}` : String(v || '').trim(); };
+
+  async function pageFiscal() {
+    await api.refresh(); await cargar();
+    const xs = fiscales(), puede = esCompras() && D.fiscalListo;
+    const usos = id => D.compras.filter(c => (facturarA(c) || {}).id === id).length;
+    const noReg = [...new Map(D.compras.map(receptor).filter(x => x && x.tipo === 'noreg').map(x => [x.rfc, x])).values()];
+    return {
+      title: 'Datos fiscales',
+      html: `<section class="page">
+        <header class="page-head rv"><div><p class="eyebrow">A quién se le factura</p><h1 class="title">Datos fiscales</h1></div></header>
+        ${D.fiscalListo ? `<div class="note note--info rv" style="--d:60">${I.fiscal}<p>Las razones sociales de la empresa a las que los proveedores facturan. Cada compra dice a cuál se factura (la <b>predeterminada</b> si no se elige otra) y al leer el XML se revisa que la factura venga a una de estas. ${puede ? 'Con <b>Copiar datos</b> los mandas al proveedor por WhatsApp o correo.' : ''}</p></div>`
+          : `<div class="note rv" style="--d:60">${I.alert}<p><b>Falta correr <span class="mono">supabase/07-datos-fiscales.sql</span> en Supabase.</b> Mientras, se usa la empresa de "Respaldo y datos" y no se pueden agregar razones sociales.</p></div>`}
+        ${noReg.length && puede ? `<div class="note rv" style="--d:80">${I.alert}<p><b>${noReg.length === 1 ? 'Hay una factura' : 'Hay facturas'} a nombre de ${noReg.length === 1 ? 'un RFC que no está' : 'RFC que no están'} aquí:</b> ${noReg.map(x => `${esc(x.nombre || '')} <span class="mono">${esc(x.rfc)}</span>`).join(', ')}. Ábrela desde Compras para agregarla o pedir la corrección al proveedor.</p></div>` : ''}
+        ${xs.length ? `<div class="cards cards--amplias">${xs.map((x, i) => `<article class="card wcard fcard rv${x.predeterminada ? ' is-mine' : ''}" style="--d:${100 + i * 60}">
+            <div class="c-top"><span class="av ${tono(x.nombre)}">${esc(iniciales(x.nombre))}</span><div class="c-id"><span class="pname">${esc(x.nombre)}</span><span class="sub mono">${esc(x.rfc)}</span></div>
+              ${x.predeterminada ? `<span class="tagx tagx--ok">${I.check}Predeterminada</span>` : ''}</div>
+            <dl class="dl dl--fis">
+              <div><dt>Régimen fiscal</dt><dd>${esc(x.regimen || '—')}</dd></div>
+              <div><dt>Código postal</dt><dd class="mono">${esc(x.cp || '—')}</dd></div>
+              <div><dt>Uso de CFDI</dt><dd>${esc(x.usoCfdi || '—')}</dd></div>
+              <div><dt>Correo para facturas</dt><dd>${x.correo ? esc(x.correo) : '—'}</dd></div>
+              ${x.notas ? `<div><dt>Notas</dt><dd>${esc(x.notas)}</dd></div>` : ''}
+            </dl>
+            <div class="files">${x.constancia.length ? x.constancia.map(a => `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}" title="Abrir ${esc(a.nombre)}">${I.file}<span>Constancia de situación fiscal</span><em>PDF</em></button>`).join('') : '<span class="fchip none">Sin constancia</span>'}</div>
+            <div class="c-bot"><small class="muted">${usos(x.id) ? usos(x.id) + (usos(x.id) === 1 ? ' compra' : ' compras') : 'Sin compras todavía'}${x.actualizadoPor ? ' · editó ' + esc(x.actualizadoPor) : ''}</small>
+              <div class="f-acts"><button class="tbtn tbtn--sm" type="button" data-copiar="${esc(x.id)}">${I.copy}<span>Copiar datos</span></button>
+              ${puede ? `<button class="tbtn tbtn--sm" type="button" data-editar="${esc(x.id)}">${I.edit}<span>Editar</span></button>
+                ${x.predeterminada ? '' : `<button class="tbtn tbtn--sm" type="button" data-pred="${esc(x.id)}">${I.star}<span>Predeterminada</span></button>
+                <button class="ibtn" type="button" data-borrar="${esc(x.id)}" title="Borrar" aria-label="Borrar ${esc(x.nombre)}">${I.trash}</button>`}` : ''}</div></div>
+          </article>`).join('')}</div>`
+          : `<div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">Sin datos fiscales</h2><p class="muted">${puede ? 'Agrega la razón social a la que se factura (la primera queda como predeterminada).' : 'Compras, Dirección o el admin técnico los dan de alta.'}</p>${puede ? `<div class="empty-acts"><button class="btn btn--solid" type="button" data-act="nueva-fiscal">${I.plus}<span>Agregar razón social</span></button></div>` : ''}</div>`}
+      </section>`,
+      bind(sec) {
+        const de = id => xs.find(x => x.id === id);
+        $$('[data-ruta]', sec).forEach(b => b.addEventListener('click', () => abrirArchivo(b.dataset.ruta)));
+        $$('[data-copiar]', sec).forEach(b => b.addEventListener('click', () => copiarFiscal(de(b.dataset.copiar))));
+        $$('[data-editar]', sec).forEach(b => b.addEventListener('click', () => drFiscal(de(b.dataset.editar))));
+        $$('[data-pred]', sec).forEach(b => b.addEventListener('click', async () => {
+          const x = de(b.dataset.pred);
+          if (!(await api.confirmar({ titulo: 'Razón social predeterminada', texto: `Las compras nuevas se facturarán a <b>${esc(x.nombre)}</b> si no se elige otra. Las compras que ya existen no cambian.`, ok: 'Hacer predeterminada' }))) return;
+          if (await hacer(() => R.predeterminarFiscal(x.id), `${x.nombre} es la predeterminada.`)) api.rerender();
+        }));
+        $$('[data-borrar]', sec).forEach(b => b.addEventListener('click', async () => {
+          const x = de(b.dataset.borrar);
+          if (!(await api.confirmar({ titulo: 'Borrar razón social', texto: `Se borrará <b>${esc(x.nombre)}</b> (${esc(x.rfc)}) con su constancia. Si ya se usó en compras no se puede borrar.`, ok: 'Borrar', peligro: true }))) return;
+          if (await hacer(() => R.borrarFiscal(x.id), 'Razón social borrada.')) api.rerender();
+        }));
+      }
+    };
+  }
+
+  // x = razón social a editar (o null), pre = datos sugeridos (del XML), compraId = compra que se factura a esta razón nueva
+  function drFiscal(x, pre = {}, compraId = '') {
+    if (!esCompras() || !D.fiscalListo) { toast(D.fiscalListo ? 'Solo compras, Dirección y el admin técnico editan los datos fiscales.' : 'Falta correr 07-datos-fiscales.sql en Supabase.'); return; }
+    const v = Object.assign({ nombre: '', rfc: '', regimen: '', cp: '', usoCfdi: '', correo: '', notas: '', constancia: [] }, x || {}, x ? {} : {
+      nombre: pre.nombre || '', rfc: pre.rfc || '', regimen: conNombre(REGIMENES, pre.regimen), cp: pre.cp || '', usoCfdi: conNombre(USOS, pre.usoCfdi) });
+    api.openPanel(`<form class="dr-form" novalidate>
+      ${drHead('Datos fiscales', x ? 'Editar razón social' : 'Agregar razón social')}
+      <div class="dr-b">
+        ${!x && pre.rfc ? `<p class="note note--info">${I.xml}<span>Datos tomados del XML de la factura. Revísalos contra la constancia de situación fiscal.</span></p>` : ''}
+        <fieldset class="fs"><legend><span class="mono">1</span>Como aparece en la constancia</legend><div class="fs-b"><div class="grid2">
+          <label class="fld fld--wide"><span class="fld-l">Razón social o nombre <em>*</em></span><input class="in" name="nombre" value="${esc(v.nombre)}" required></label>
+          <label class="fld"><span class="fld-l">RFC <em>*</em></span><input class="in mono" name="rfc" value="${esc(v.rfc)}" maxlength="13" required autocapitalize="characters"><span class="fld-h">12 caracteres (empresa) o 13 (persona física).</span></label>
+          <label class="fld"><span class="fld-l">Código postal</span><input class="in" name="cp" value="${esc(v.cp)}" maxlength="5" inputmode="numeric"></label>
+          <label class="fld fld--wide"><span class="fld-l">Régimen fiscal</span><input class="in" name="regimen" value="${esc(v.regimen)}" list="dl-regimen" placeholder="Escribe o elige"><datalist id="dl-regimen">${Object.keys(REGIMENES).map(k => `<option value="${esc(conNombre(REGIMENES, k))}">`).join('')}</datalist></label>
+          <label class="fld fld--wide"><span class="fld-l">Uso de CFDI</span><input class="in" name="uso" value="${esc(v.usoCfdi)}" list="dl-uso" placeholder="Escribe o elige"><datalist id="dl-uso">${Object.keys(USOS).map(k => `<option value="${esc(conNombre(USOS, k))}">`).join('')}</datalist></label>
+        </div></div></fieldset>
+        <fieldset class="fs"><legend><span class="mono">2</span>Para el proveedor</legend><div class="fs-b"><div class="grid2">
+          <label class="fld fld--wide"><span class="fld-l">Correo para recibir facturas</span><input class="in" name="correo" type="email" value="${esc(v.correo)}"></label>
+          <label class="fld fld--wide"><span class="fld-l">Notas</span><textarea class="in" name="notas" rows="2">${esc(v.notas)}</textarea></label>
+          <label class="fld fld--wide"><span class="fld-l">Constancia de situación fiscal (PDF)</span><input class="in" name="pdf" type="file" accept="application/pdf,image/*">
+            <span class="fld-h">${v.constancia.length ? 'Ya tiene constancia; si eliges otra, se reemplaza.' : 'Opcional. Se guarda en la carpeta privada.'}</span></label>
+        </div></div></fieldset>
+      </div>
+      ${drFoot(x ? 'Guardar' : 'Agregar')}
+    </form>`, {}, panel => {
+      const f = $('form', panel), err = $('[data-err]', panel);
+      f.addEventListener('input', api.markDirty);
+      f.rfc.addEventListener('input', () => { const p = f.rfc.selectionStart; f.rfc.value = f.rfc.value.toUpperCase().replace(/\s/g, ''); f.rfc.setSelectionRange(p, p); });
+      f.addEventListener('submit', async e => {
+        e.preventDefault();
+        const rfc = f.rfc.value.trim().toUpperCase(), cp = f.cp.value.trim();
+        if (!f.nombre.value.trim()) { err.textContent = 'Escribe la razón social.'; return; }
+        if (!/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(rfc)) { err.textContent = 'El RFC no tiene un formato válido (12 o 13 caracteres).'; return; }
+        if (cp && !/^\d{5}$/.test(cp)) { err.textContent = 'El código postal debe tener 5 dígitos.'; return; }
+        const otra = D.fiscal.find(y => y.rfc === rfc && (!x || y.id !== x.id));
+        if (otra) { err.textContent = `Ese RFC ya está registrado (${otra.nombre}).`; return; }
+        ocupado(panel, true, 'Guardando…');
+        let id;
+        try {
+          id = await R.guardarFiscal({ id: x ? x.id : '', nombre: f.nombre.value, rfc, regimen: f.regimen.value, cp, usoCfdi: f.uso.value, correo: f.correo.value, notas: f.notas.value }, f.pdf.files[0] || null);
+          if (compraId) await R.actualizarCompra(compraId, { facturarA: id });
+        } catch (y) { ocupado(panel, false, x ? 'Guardar' : 'Agregar'); err.textContent = y.message; if (id) await cargar(); return; }
+        await cargar(); api.closeDrawer(true);
+        toast(x ? 'Datos fiscales guardados.' : compraId ? `Razón social agregada; la compra queda facturada a ${f.nombre.value.trim()}.` : 'Razón social agregada.');
+        api.rerender();
+      });
+    });
+  }
+
   // Mantiene la lista "Obras" del directorio al día: agrega el nombre o lo renombra en todos los proveedores
   async function syncListaObras(anterior, nuevo) {
     try {
@@ -1571,6 +1792,7 @@
         const verif = ks.filter(k => k.estado === 'verificado');
         return `<section class="ogroup">
           <div class="ogroup-h rv" style="--d:${Math.min(di++ * 40, 400)}"><div><h2>${esc(o.nombre || 'Obra')} · semana ${w.semana}</h2><p class="sub">${esc(wkRange(w))} · ${ks.length} ${ks.length === 1 ? 'gasto' : 'gastos'} · ${money(tot)}</p></div>
+            <div class="k-rep"><button class="tbtn tbtn--sm" type="button" data-krep="pdf" data-o="${esc(oid)}" data-w="${wk}" title="Reporte semanal de caja chica en PDF">${I.print}<span>PDF</span></button><button class="tbtn tbtn--sm" type="button" data-krep="xls" data-o="${esc(oid)}" data-w="${wk}" title="Reporte semanal de caja chica en Excel">${I.down}<span>Excel</span></button></div>
             ${esCompras() && verif.length ? `<button class="btn btn--sm" type="button" data-reemb="${esc(verif.map(k => k.id).join(','))}">${I.check}<span>Marcar reembolsado · ${money(verif.reduce((a, k) => a + k.monto, 0))}</span></button>` : ''}</div>
           <div class="klist">${ks.map(k => kItem(k, Math.min(di++ * 30, 500))).join('')}</div>
         </section>`;
@@ -1609,6 +1831,10 @@
           if (await hacer(() => R.estadoCaja(ids, 'reembolsado'), 'Semana marcada como reembolsada.')) api.rerender();
         }));
         $$('[data-k]', sec).forEach(b => b.addEventListener('click', () => accionCaja(caja(b.closest('[data-kid]').dataset.kid), b.dataset.k)));
+        $$('[data-krep]', sec).forEach(b => b.addEventListener('click', () => {
+          const wk = +b.dataset.w, w = { anio: Math.floor(wk / 100), semana: wk % 100 };
+          (b.dataset.krep === 'pdf' ? imprimirCaja : excelCaja)(b.dataset.o, w);
+        }));
       }
     };
   }
@@ -1632,6 +1858,8 @@
         <div class="k-top"><b>${esc(k.concepto || 'Sin concepto')}</b>${kTag(k)}<span class="tagx${k.origen === 'directo' ? ' tagx--ext' : ''}">${k.origen === 'directo' ? 'Gasto directo' : r ? 'De ' + esc(r.folio) : 'De requisición'}</span></div>
         <p class="k-sub">${k.cantidad ? `${qty(k.cantidad)} ${esc(k.unidad)} · ` : ''}${k.lugar ? esc(k.lugar) + ' · ' : ''}${k.fecha ? esc(fDate(k.fecha)) + ' · ' : ''}${k.comprobante === 'factura' ? 'Factura' : k.comprobante === 'ticket' ? 'Ticket' : 'Nota'}${k.compradoPor && k.estado !== 'por_comprar' ? ' · ' + esc(k.compradoPor) : ''}</p>
         ${k.estado === 'rechazado' && k.motivoRechazo ? `<p class="k-rej">${I.alert}<span>Rechazado: ${esc(k.motivoRechazo)}</span></p>` : ''}
+        ${(() => { const av = (k.avisos || []).find(a => a.evento === k.estado);   // v0.10: último correo del estado actual
+          return av ? `<p class="k-aviso">${I.mail}<span>Correo ${av.evento === 'rechazado' ? 'al residente' : 'al coordinador'} · ${esc(av.para.map(p => p.nombre || p.correo).join(', '))} · ${esc(fDateT(av.en))}</span></p>` : ''; })()}
         ${k.archivos.length ? `<div class="k-files">${k.archivos.map(a => `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}">${I[/\.(pdf|xml)$/i.test(a.nombre) ? 'file' : 'camera']}<span>${esc(a.nombre)}</span></button>`).join('')}</div>` : ''}
       </div>
       <div class="k-side"><b class="k-monto">${k.estado === 'por_comprar' ? '—' : money(k.monto)}</b><div class="k-acts">${acts}</div></div>
@@ -1644,7 +1872,7 @@
     if (a === 'aprobar') { if (await hacer(() => R.estadoCaja(k.id, 'por_verificar'), 'Gasto aprobado: compras ya lo ve.')) api.rerender(); return; }
     if (a === 'rechazar') {
       const m = await api.preguntar({ titulo: 'Rechazar gasto', texto: `<b>${esc(k.concepto)}</b> · ${money(k.monto)}`, etiqueta: 'Motivo (lo verá el residente)', campo: 'area', ok: 'Rechazar', requerido: true, peligro: true });
-      if (m != null && await hacer(() => R.estadoCaja(k.id, 'rechazado', m), 'Gasto rechazado.')) api.rerender();
+      if (m != null && await hacer(() => R.estadoCaja(k.id, 'rechazado', m), 'Gasto rechazado.')) { api.rerender(); avisarCaja(k.id, 'rechazado'); }
       return;
     }
     const sig = { verificar: 'verificado', desverificar: 'por_verificar', desreemb: 'verificado' }[a];
@@ -1653,6 +1881,18 @@
       const txt = k.origen === 'requisicion' && k.estado === 'por_comprar' ? 'El material regresa a "Autorizado" en su requisición para que compras lo cotice.' : 'Se borra el gasto con sus fotos.';
       if (!(await api.confirmar({ titulo: 'Quitar de caja chica', texto: `<b>${esc(k.concepto)}</b>. ${txt}`, ok: 'Quitar', peligro: true }))) return;
       if (await hacer(() => R.borrarCaja(k.id), 'Quitado de caja chica.')) api.rerender();
+    }
+  }
+
+  // v0.10: correo de caja chica; si falla, el cambio ya quedó y se avisa
+  async function avisarCaja(id, evento) {
+    try {
+      const r = await R.avisarCaja(id, evento);
+      toast(`Correo enviado a ${r.aviso.para.map(p => p.nombre || p.correo).join(' y ')}.`);
+      await cargar();
+      if (location.hash === '#/caja') api.rerender();
+    } catch (e) {
+      toast(`${evento === 'rechazado' ? 'El rechazo' : 'El gasto'} quedó guardado, pero no salió el correo: ${e.message}`);
     }
   }
 
@@ -1703,14 +1943,97 @@
           comprobante: (f.querySelector('[name="comp"]:checked') || {}).value || 'nota', archivos: x.archivos
         });
         ocupado(panel, true, 'Subiendo…');
-        try { await R.guardarGasto(g, files, comprar ? 'por_verificar' : reenviar ? 'por_aprobar' : undefined); }
+        let gid;
+        try { gid = await R.guardarGasto(g, files, comprar ? 'por_verificar' : reenviar ? 'por_aprobar' : undefined); }
         catch (x2) { ocupado(panel, false, 'Guardar'); err.textContent = x2.message; return; }
         await cargar();
         api.closeDrawer(true);
         toast(nuevo || reenviar ? 'Gasto enviado: falta que lo apruebe el coordinador.' : comprar ? 'Nota guardada: compras la verificará.' : 'Gasto actualizado.');
         if (location.hash === '#/caja') api.rerender(); else location.hash = '#/caja';
+        // v0.10: correo al coordinador (el gasto ya quedó guardado aunque el correo falle)
+        if ((nuevo || reenviar) && (caja(gid) || {}).estado === 'por_aprobar') avisarCaja(gid, 'por_aprobar');
       });
     });
+  }
+
+  /* ---------- Reporte semanal de caja chica (v0.10): PDF y Excel por obra y semana ---------- */
+  // Todos los gastos de esa obra y semana que el rol ve, sin importar el filtro de la página; los rechazados no entran
+  function reporteCaja(oid, w) {
+    const o = obra(oid) || {};
+    const ks = D.caja.filter(k => k.obraId === oid && wkKey(k) === wkKey(w) && k.estado !== 'rechazado'
+      && !(rol() === 'compras' && k.origen === 'directo' && k.estado === 'por_aprobar'))
+      .sort((a, b) => String(a.fecha || '9').localeCompare(String(b.fecha || '9')) || String(a.creadoEn).localeCompare(String(b.creadoEn)));
+    const suma = (...es) => ks.filter(k => es.includes(k.estado)).reduce((a, k) => a + k.monto, 0);
+    const origen = k => { const r = k.partidaId && D.requisiciones.find(x => x.partidas.some(p => p.id === k.partidaId)); return k.origen === 'directo' ? 'Gasto directo' : r ? r.folio : 'Requisición'; };
+    const comp = k => ({ factura: 'Factura', ticket: 'Ticket' }[k.comprobante] || 'Nota');
+    const totales = [
+      ['Gastado (con nota)', suma('por_aprobar', 'por_verificar', 'verificado', 'reembolsado')],
+      ['Por aprobar (coordinador)', suma('por_aprobar')],
+      ['Por verificar (compras)', suma('por_verificar')],
+      ['Verificado, por reembolsar', suma('verificado')],
+      ['Reembolsado', suma('reembolsado')]
+    ];
+    const porComprar = ks.filter(k => k.estado === 'por_comprar').length;
+    let fondo = '';
+    if (o.fondoCaja != null) {
+      const usado = D.caja.filter(k => k.obraId === oid && cuenta(k)).reduce((a, k) => a + k.monto, 0);
+      fondo = `Fondo fijo ${money(o.fondoCaja)} · usado sin reembolsar ${money(usado)} · disponible ${money(o.fondoCaja - usado)} (al ${fDate(today())})`;
+    }
+    return {
+      o, ks, totales, porComprar, fondo, origen, comp,
+      titulo: `REPORTE DE CAJA CHICA ${String(o.nombre || '').toUpperCase()}`,
+      archivo: `Caja chica ${o.clave || o.nombre || 'obra'} S${w.semana}`,
+      rango: wkRange(w),
+      res: (o.residente || {}).nombre || ''
+    };
+  }
+  const KCOLS = ['#', 'FECHA', 'CONCEPTO', 'CANT.', 'UNIDAD', 'LUGAR', 'COMPROBANTE', 'ORIGEN', 'ESTADO', 'MONTO'];
+  const KFIRMAS = ['NOMBRE Y FIRMA DEL RESIDENTE DE OBRA', 'NOMBRE Y FIRMA DE COMPRAS'];
+
+  function imprimirCaja(oid, w) {
+    const x = reporteCaja(oid, w);
+    if (!x.ks.length) { toast('No hay gastos de caja chica en esa semana.'); return; }
+    $('#print').innerHTML = `<div class="pf pf--k">
+      <div class="pf-h"><div class="pf-logo">${api.logoSVG()}</div><div class="pf-t"><h1>${esc(x.titulo)}</h1><p><span>SEMANA: ${w.semana}</span><span>${esc(x.rango.toUpperCase())}</span>${x.res ? `<span>RESIDENTE: ${esc(x.res.toUpperCase())}</span>` : ''}</p></div></div>
+      <table><colgroup><col style="width:4%"><col style="width:8%"><col style="width:20%"><col style="width:6%"><col style="width:7%"><col style="width:15%"><col style="width:11%"><col style="width:10%"><col style="width:9%"><col style="width:10%"></colgroup>
+        <thead><tr>${KCOLS.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+        <tbody>${x.ks.map((k, i) => `<tr><td>${i + 1}</td><td>${k.fecha ? ddmmyy(k.fecha) : ''}</td><td class="l">${esc(k.concepto)}</td><td>${k.cantidad ? qty(k.cantidad) : ''}</td><td>${esc(k.unidad)}</td><td class="l">${esc(k.lugar)}</td><td>${x.comp(k)}</td><td>${esc(x.origen(k))}</td><td>${esc(KEST[k.estado].label)}</td><td class="r">${k.estado === 'por_comprar' ? '—' : money(k.monto)}</td></tr>`).join('')}</tbody>
+        <tfoot>${x.totales.map(([t, v], i) => `<tr class="${i === 0 ? 'tt' : ''}"><td colspan="9" class="r">${t.toUpperCase()}</td><td class="r">${money(v)}</td></tr>`).join('')}</tfoot>
+      </table>
+      ${x.porComprar ? `<p class="pf-n">${x.porComprar} ${x.porComprar === 1 ? 'material sigue' : 'materiales siguen'} por comprar (sin nota todavía).</p>` : ''}
+      ${x.fondo ? `<p class="pf-n">${esc(x.fondo)}</p>` : ''}
+      <div class="pf-firmas">${KFIRMAS.map(t => `<div>${t}</div>`).join('')}</div>
+      <p class="pf-n">Generado el ${esc(fDateT(new Date().toISOString()))} por ${esc(yo())} desde la plataforma interna de Galitha.</p>
+    </div>`;
+    const t0 = document.title;
+    document.title = x.archivo;   // nombre sugerido del PDF
+    document.body.classList.add('printing');
+    const fin = () => { document.title = t0; document.body.classList.remove('printing'); removeEventListener('afterprint', fin); };
+    addEventListener('afterprint', fin);
+    setTimeout(() => print(), 60);
+  }
+  function excelCaja(oid, w) {
+    const x = reporteCaja(oid, w);
+    if (!x.ks.length) { toast('No hay gastos de caja chica en esa semana.'); return; }
+    const td = (v, s = '') => `<td style="border:.5pt solid #000;vertical-align:middle;font-size:9pt;${s}">${v}</td>`;
+    const num = "mso-number-format:'\\#\\,\\#\\#0\\.00';text-align:right";
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8">
+      <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Caja S${w.semana}</x:Name><x:WorksheetOptions><x:Print><x:ValidPrinterInfo/></x:Print></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
+      <body><table style="border-collapse:collapse;font-family:Calibri">
+      <col width="32"><col width="74"><col width="230"><col width="60"><col width="64"><col width="170"><col width="90"><col width="110"><col width="100"><col width="100">
+      <tr><td colspan="2" rowspan="2" style="font-size:20pt;font-weight:bold;color:#1d1d1b;letter-spacing:4pt">GALITHA</td><td colspan="8" style="text-align:center;font-weight:bold;font-size:13pt">${esc(x.titulo)}</td></tr>
+      <tr><td colspan="3" style="text-align:center;font-weight:bold;font-size:9pt">SEMANA: ${w.semana} · ${esc(x.rango.toUpperCase())}</td><td colspan="5" style="text-align:center;font-weight:bold;font-size:9pt">${x.res ? 'RESIDENTE: ' + esc(x.res.toUpperCase()) : ''}</td></tr>
+      <tr><td colspan="10"></td></tr>
+      <tr>${KCOLS.map(c => `<td style="border:.5pt solid #000;background:#D0CECE;font-weight:bold;text-align:center;font-size:9pt">${c}</td>`).join('')}</tr>
+      ${x.ks.map((k, i) => `<tr>${td(i + 1, 'text-align:center')}${td(k.fecha ? ddmmyy(k.fecha) : '', "text-align:center;mso-number-format:'\\@'")}${td(esc(k.concepto))}${td(k.cantidad || '', 'text-align:center')}${td(esc(k.unidad), 'text-align:center')}${td(esc(k.lugar))}${td(x.comp(k), 'text-align:center')}${td(esc(x.origen(k)), 'text-align:center')}${td(esc(KEST[k.estado].label), 'text-align:center')}${k.estado === 'por_comprar' ? td('—', 'text-align:right') : td(k.monto, num)}</tr>`).join('')}
+      ${x.totales.map(([t, v], i) => `<tr><td colspan="9" style="text-align:right;font-size:9pt;font-weight:${i === 0 ? 'bold' : 'normal'}">${t.toUpperCase()}</td>${td(v, num + (i === 0 ? ';font-weight:bold' : ''))}</tr>`).join('')}
+      ${x.porComprar ? `<tr><td colspan="10" style="font-size:9pt">${x.porComprar} ${x.porComprar === 1 ? 'material sigue' : 'materiales siguen'} por comprar (sin nota todavía).</td></tr>` : ''}
+      ${x.fondo ? `<tr><td colspan="10" style="font-size:9pt">${esc(x.fondo)}</td></tr>` : ''}
+      <tr><td colspan="10" style="height:40pt"></td></tr>
+      <tr><td></td><td colspan="3" style="border-top:.5pt solid #000;text-align:center;font-weight:bold;font-size:9pt">${KFIRMAS[0]}</td><td colspan="2"></td><td colspan="3" style="border-top:.5pt solid #000;text-align:center;font-weight:bold;font-size:9pt">${KFIRMAS[1]}</td></tr>
+      </table></body></html>`;
+    api.descargar(`${x.archivo}.xls`, '﻿' + html, 'application/vnd.ms-excel');
+    toast('Excel descargado. Si Excel avisa que el formato es de otra versión, ábrelo de todos modos.');
   }
 
   function noEncontrado(t, txt, href, back) {
@@ -1797,10 +2120,12 @@
         <div class="acts">
           <button class="btn btn--solid" type="button" data-r-exp${R.vacio() ? ' disabled' : ''}>${I.down}<span>Exportar JSON de requisiciones</span></button>
         </div>`, '', 260)}</div>
-      <div class="d-side">${api.panel('06', 'Datos de la empresa para las facturas', `
+      <div class="d-side">${api.panel('06', 'Datos de la empresa', (D.fiscalListo ? `
+        <p class="muted small">Las razones sociales a las que se factura viven en <a class="link-u" href="#/fiscal">Datos fiscales</a>. Aquí quedan el correo de requisiciones y el "Proceso de envío" que se imprime en el formato.</p>
+        ${api.dl([['Factura a (predeterminada)', fiscalPred() ? `${esc(fiscalPred().nombre)} <span class="mono">${esc(fiscalPred().rfc)}</span>` : '<a class="link-u" href="#/fiscal">Agrégala en Datos fiscales</a>'], ['Correo de requisiciones', esc(emp.correoRequisiciones || '—')], ['Proceso de envío', D.config.proceso.length ? D.config.proceso.length + ' puntos' : '—']])}` : `
         <p class="muted small">Se usan para revisar que cada XML esté a nombre de la empresa y para imprimir el "Proceso de envío" en el formato.</p>
-        ${api.dl([['Empresa', esc(emp.nombre || '—')], ['RFC', emp.rfc ? `<span class="mono">${esc(emp.rfc)}</span>` : '—'], ['Correo de requisiciones', esc(emp.correoRequisiciones || '—')], ['Proceso de envío', D.config.proceso.length ? D.config.proceso.length + ' puntos' : '—']])}
-        ${esJefe() ? `<div class="acts"><button class="btn" type="button" data-r-cfg>${I.edit}<span>Editar</span></button></div>` : ''}`, '', 300)}</div>
+        ${api.dl([['Empresa', esc(emp.nombre || '—')], ['RFC', emp.rfc ? `<span class="mono">${esc(emp.rfc)}</span>` : '—'], ['Correo de requisiciones', esc(emp.correoRequisiciones || '—')], ['Proceso de envío', D.config.proceso.length ? D.config.proceso.length + ' puntos' : '—']])}`)
+        + (esJefe() ? `<div class="acts"><button class="btn" type="button" data-r-cfg>${I.edit}<span>Editar</span></button></div>` : ''), '', 300)}</div>
     </div>`;
   }
   function datosBind(root) {
@@ -1819,9 +2144,10 @@
     api.openPanel(`<form class="dr-form" novalidate>
       ${drHead('Respaldo y datos', 'Datos de la empresa')}
       <div class="dr-b">
-        <fieldset class="fs"><legend><span class="mono">1</span>Empresa que recibe las facturas</legend><div class="fs-b"><div class="grid2">
+        <fieldset class="fs"><legend><span class="mono">1</span>${D.fiscalListo ? 'Correo de requisiciones' : 'Empresa que recibe las facturas'}</legend><div class="fs-b"><div class="grid2">
+          ${D.fiscalListo ? `<p class="muted small fld--wide">La razón social y el RFC ahora se editan en <a class="link-u" href="#/fiscal" data-close>Datos fiscales</a>.</p>` : `
           <label class="fld fld--wide"><span class="fld-l">Razón social</span><input class="in" name="nombre" value="${esc(emp.nombre)}"></label>
-          <label class="fld"><span class="fld-l">RFC</span><input class="in" name="rfc" value="${esc(emp.rfc)}" maxlength="13"></label>
+          <label class="fld"><span class="fld-l">RFC</span><input class="in" name="rfc" value="${esc(emp.rfc)}" maxlength="13"></label>`}
           <label class="fld"><span class="fld-l">Correo de requisiciones</span><input class="in" name="correo" type="email" value="${esc(emp.correoRequisiciones)}"></label>
         </div></div></fieldset>
         <fieldset class="fs"><legend><span class="mono">2</span>Proceso de envío de requisiciones</legend><div class="fs-b">
@@ -1834,11 +2160,12 @@
       f.addEventListener('input', api.markDirty);
       f.addEventListener('submit', async e => {
         e.preventDefault();
-        const rfc = f.rfc.value.trim().toUpperCase();
+        // Con Datos fiscales (07) la razón social y el RFC ya no se editan aquí: se conservan como estaban
+        const rfc = f.rfc ? f.rfc.value.trim().toUpperCase() : emp.rfc;
         if (rfc && !/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(rfc)) { $('[data-err]', panel).textContent = 'El RFC no tiene un formato válido.'; return; }
         ocupado(panel, true, 'Guardando…');
         try {
-          await R.guardarConfig('empresa', { nombre: f.nombre.value.trim(), rfc, correoRequisiciones: f.correo.value.trim() });
+          await R.guardarConfig('empresa', { nombre: f.nombre ? f.nombre.value.trim() : emp.nombre, rfc, correoRequisiciones: f.correo.value.trim() });
           await R.guardarConfig('proceso', f.proceso.value.split('\n').map(s => s.trim()).filter(Boolean));
         } catch (x) { ocupado(panel, false, 'Guardar'); $('[data-err]', panel).textContent = x.message; return; }
         await cargar(); api.closeDrawer(true); toast('Datos de la empresa guardados.'); api.rerender();
@@ -1863,16 +2190,18 @@
   }
 
   return {
-    pages: { requisiciones: pageReqs, r: pageReq, compras: pageCompras, c: pageCompra, obras: pageObras, caja: pageCaja },
+    pages: { requisiciones: pageReqs, r: pageReq, compras: pageCompras, c: pageCompra, obras: pageObras, caja: pageCaja, fiscal: pageFiscal },
     nav: { r: 'requisiciones', c: 'compras' },
-    titulos: { requisiciones: 'Requisiciones', compras: 'Compras', obras: 'Obras', caja: 'Caja chica' },
+    titulos: { requisiciones: 'Requisiciones', compras: 'Compras', obras: 'Obras', caja: 'Caja chica', fiscal: 'Datos fiscales' },
     acciones: {
       requisiciones: { label: 'Nueva requisición', act: 'nueva-req', puede: () => esCoord() || D.obras.some(o => esResDe(o.id)) },
       compras: { label: 'Nueva requisición', act: 'nueva-req', puede: () => esCoord() || D.obras.some(o => esResDe(o.id)) },
       obras: { label: 'Agregar obra', act: 'nueva-obra', puede: esJefe },
-      caja: { label: 'Agregar gasto', act: 'nuevo-gasto', puede: () => esJefe() || D.obras.some(o => esResDe(o.id)) }
+      caja: { label: 'Agregar gasto', act: 'nuevo-gasto', puede: () => esJefe() || D.obras.some(o => esResDe(o.id)) },
+      fiscal: { label: 'Agregar razón social', act: 'nueva-fiscal', puede: () => esCompras() && D.fiscalListo }
     },
     onAct(a) {
+      if (a === 'nueva-fiscal') drFiscal(null);
       if (a === 'nueva-req') drReq(null);
       if (a === 'nueva-obra' && esJefe()) drObra(null);
       if (a === 'nuevo-gasto') cargar().then(() => drGasto(null));

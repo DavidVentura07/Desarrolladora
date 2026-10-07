@@ -1,5 +1,7 @@
 /* =========================================================
    GALITHA · Requisiciones de obra, obras y compras — Datos
+   v0.10: + datos fiscales (razones sociales a las que se factura),
+   "Facturar a" por compra y fotos extra en la remisión.
    v0.7: + historial de residentes (obra_residentes) y avisos por correo
    de requisiciones (avisos).
    v0.5: guarda en Supabase (obras, obra_suplentes, requisiciones,
@@ -86,7 +88,8 @@
       return Object.assign({}, base, {
         serie: str(x.serie), folio: str(x.folio), fecha: str(x.fecha) || base.fecha, subtotal: num(x.subtotal), total: num(x.total),
         uuid: str(x.uuid).toUpperCase(), emisorRfc: str(x.emisorRfc), emisorNombre: str(x.emisorNombre),
-        receptorRfc: str(x.receptorRfc), receptorNombre: str(x.receptorNombre), metodoPago: str(x.metodoPago), formaPago: str(x.formaPago),
+        receptorRfc: str(x.receptorRfc).toUpperCase(), receptorNombre: str(x.receptorNombre),
+        usoCfdi: str(x.usoCfdi), regimenReceptor: str(x.regimenReceptor), cpReceptor: str(x.cpReceptor), metodoPago: str(x.metodoPago), formaPago: str(x.formaPago),
         version: str(x.version), conceptos: arr(x.conceptos), cargadaEn: base.fecha,
         pdfArchivo: pdf || null, xmlArchivo: xml || null
       });
@@ -103,6 +106,7 @@
     return {
       id: c.id, obraId: c.obra_id, anio: c.anio, semana: c.semana, requisicionId: '',
       iva: c.iva !== false,   // v0.8: sin IVA no lleva factura ni XML
+      facturarA: c.facturar_a || '',   // v0.10: razón social a la que se factura (vacío = la predeterminada)
       proveedor: { nombre: str(prov.nombre), rfc: str(prov.rfc).toUpperCase(), razonSocial: str(prov.razonSocial), id: c.proveedor_id || '' },
       partidas: arr(c.compra_partidas).map(x => x.partida_id),
       fechaEntrega: fecha(c.fecha_entrega), entregas: obj(c.entregas), notas: str(c.notas),
@@ -121,14 +125,21 @@
     verificadoPor: quien(k.verificado_por), reembolsadoEn: k.reembolsado_en || '', actualizadoEn: k.actualizado_en
   });
 
+  // v0.10: razón social a la que se factura
+  const deFiscal = f => ({
+    id: f.id, nombre: str(f.nombre), rfc: str(f.rfc).toUpperCase(), regimen: str(f.regimen), cp: str(f.cp), usoCfdi: str(f.uso_cfdi),
+    correo: str(f.correo), notas: str(f.notas), constancia: arr(f.constancia), predeterminada: !!f.predeterminada,
+    actualizadoPor: quien(f.actualizado_por || f.creado_por), actualizadoEn: f.actualizado_en
+  });
+
   /* ---------- Estado en memoria ---------- */
-  let db = { obras: [], requisiciones: [], compras: [], caja: [], config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
+  let db = { obras: [], requisiciones: [], compras: [], caja: [], fiscal: [], fiscalListo: false, config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
 
   // Tablas nuevas de la v0.7: si aún no se corre 04-ajustes.sql, la app sigue funcionando sin ellas
   const opcional = q => q.then(r => (r.error ? { data: [], error: null } : r), () => ({ data: [], error: null }));
 
   async function cargar() {
-    const [, obras, reqs, compras, config, hist, avisos, caja] = await Promise.all([
+    const [, obras, reqs, compras, config, hist, avisos, caja, fiscal] = await Promise.all([
       window.Nube.recargarPerfiles(),   // nombres de residentes, suplentes y de quién hizo cada cosa
       sb().from('obras').select('*, obra_suplentes(*)').order('nombre'),
       sb().from('requisiciones').select('*, partidas(*)').order('anio', { ascending: false }).order('semana', { ascending: false }),
@@ -136,13 +147,17 @@
       sb().from('config').select('clave, valor'),
       opcional(sb().from('obra_residentes').select('*').order('desde', { ascending: false })),
       opcional(sb().from('avisos').select('*').order('en', { ascending: false })),
-      opcional(sb().from('caja_chica').select('*').order('creado_en'))
+      opcional(sb().from('caja_chica').select('*').order('creado_en')),
+      // v0.10: si aún no se corre 07-datos-fiscales.sql, se usa la empresa de "Respaldo y datos"
+      sb().from('datos_fiscales').select('*').order('nombre').then(r => r, e => ({ data: null, error: e }))
     ]);
     const d = {
       obras: ok(obras).map(deObra),
       requisiciones: ok(reqs).map(deRequisicion),
       compras: ok(compras).map(deCompra),
       caja: ok(caja).map(deCaja),
+      fiscal: fiscal.error ? [] : arr(fiscal.data).map(deFiscal),
+      fiscalListo: !fiscal.error,
       config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] }
     };
     ok(config).forEach(c => {
@@ -155,9 +170,13 @@
     });
     // Más reciente primero; el periodo abierto (residente actual) antes que uno cerrado del mismo día
     d.obras.forEach(o => o.historial.sort((a, b) => b.desde.localeCompare(a.desde) || (a.hasta ? 1 : 0) - (b.hasta ? 1 : 0)));
+    d.caja.forEach(k => { k.avisos = []; });   // v0.10: correos de caja chica (más reciente primero)
     ok(avisos).forEach(a => {
+      const av = { evento: str(a.evento), en: a.en, por: quien(a.por), para: arr(a.para) };
       const r = a.requisicion_id && d.requisiciones.find(x => x.id === a.requisicion_id);
-      if (r) r.avisos.push({ evento: str(a.evento), en: a.en, por: quien(a.por), para: arr(a.para) });
+      if (r) r.avisos.push(av);
+      const k = a.caja_id && d.caja.find(x => x.id === a.caja_id);
+      if (k) k.avisos.push(av);
     });
     // Material mandado a caja chica
     const porCaja = new Map(d.caja.filter(k => k.partidaId).map(k => [k.partidaId, k.id]));
@@ -189,6 +208,18 @@
       if (!blob || blob.size >= file.size) return file;
       return new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' });
     } catch { return file; }
+  }
+
+  // Mensajes de la base para datos fiscales, en palabras de la oficina
+  function okFiscal(r) {
+    const m = String((r.error && r.error.message) || '');
+    if (/datos_fiscales_rfc_key/.test(m)) throw new Error('Ese RFC ya está registrado en Datos fiscales.');
+    if (/datos_fiscales_rfc_check/.test(m)) throw new Error('El RFC no tiene un formato válido (12 o 13 caracteres, en mayúsculas).');
+    if (/datos_fiscales_cp_check/.test(m)) throw new Error('El código postal debe tener 5 dígitos.');
+    if (/facturar_a_fkey/.test(m)) throw new Error('Esta razón social ya se usó en compras: no se puede borrar (así se conserva a quién se facturó).');
+    if (/datos_fiscales_una_predeterminada/.test(m)) throw new Error('Ya hay otra razón social predeterminada; recarga e inténtalo de nuevo.');
+    if (/datos_fiscales/.test(m) && /does not exist|schema cache/i.test(m)) throw new Error('Falta correr supabase/07-datos-fiscales.sql en Supabase.');
+    return ok(r);
   }
 
   const TIPOS = { pdf: 'application/pdf', xml: 'text/xml', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic' };
@@ -299,11 +330,13 @@
     /* Compras */
     async crearCompra(c) {
       const id = uid();
-      ok(await sb().from('compras').insert({
+      const fila = {
         id, obra_id: c.obraId, anio: c.anio, semana: c.semana, proveedor_id: c.proveedor.id || null,
         proveedor: { nombre: str(c.proveedor.nombre), rfc: str(c.proveedor.rfc), razonSocial: str(c.proveedor.razonSocial) },
         fecha_entrega: c.fechaEntrega || null, entregas: {}
-      }).select('id'));
+      };
+      if (c.facturarA) fila.facturar_a = c.facturarA;   // v0.10; sin elegir, la base pone la predeterminada
+      ok(await sb().from('compras').insert(fila).select('id'));
       try {
         ok(await sb().from('compra_partidas').insert(c.partidas.map(pid => ({ partida_id: pid, compra_id: id }))).select('partida_id'));
       } catch (e) {
@@ -317,6 +350,7 @@
       if ('fechaEntrega' in patch) f.fecha_entrega = patch.fechaEntrega || null;
       if ('entregas' in patch) f.entregas = patch.entregas;
       if ('iva' in patch) f.iva = !!patch.iva;
+      if ('facturarA' in patch) f.facturar_a = patch.facturarA || null;
       if ('semana' in patch) { f.anio = patch.anio; f.semana = patch.semana; }
       if ('proveedor' in patch) f.proveedor = { nombre: str(patch.proveedor.nombre), rfc: str(patch.proveedor.rfc), razonSocial: str(patch.proveedor.razonSocial) };
       const filas = ok(await sb().from('compras').update(f).eq('id', id).select('id'));
@@ -345,6 +379,38 @@
         throw e;
       }
     },
+    // v0.10: agrega fotos a una remisión ya subida (compras o el residente de la obra)
+    async agregarArchivos(docId, files) {
+      const c = db.compras.find(x => x.documentos.some(d => d.docId === docId));
+      if (!c) throw new Error('No se encontró el documento.');
+      const subidos = [];
+      try {
+        for (const f of files) subidos.push(await subirArchivo(c.obraId, c.id, f));
+        // Se vuelve a leer la lista del servidor para no perder fotos que alguien más agregó mientras tanto
+        const [actual] = ok(await sb().from('compra_documentos').select('archivos').eq('id', docId));
+        if (!actual) throw new Error('El documento ya no existe; recarga la página.');
+        const filas = ok(await sb().from('compra_documentos').update({ archivos: [...arr(actual.archivos), ...subidos.map(({ ruta, nombre }) => ({ ruta, nombre }))] }).eq('id', docId).select('id'));
+        if (!filas.length) throw new Error('Tu rol no puede agregar fotos a esta remisión (falta correr 07-datos-fiscales.sql en Supabase).');
+      } catch (e) {
+        await borrarArchivos(subidos.map(x => x.ruta)).catch(() => {});
+        throw e;
+      }
+    },
+    // v0.10: compras quita una sola foto o archivo de un documento con varios
+    async quitarArchivo(docId, ruta) {
+      const [actual] = ok(await sb().from('compra_documentos').select('archivos').eq('id', docId));
+      if (!actual) throw new Error('El documento ya no existe; recarga la página.');
+      const quedan = arr(actual.archivos).filter(a => a.ruta !== ruta);
+      if (!quedan.length) throw new Error('Es el único archivo: quita el documento completo.');
+      const filas = ok(await sb().from('compra_documentos').update({ archivos: quedan }).eq('id', docId).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede quitar archivos de este documento.');
+      await borrarArchivos([ruta]).catch(() => {});
+    },
+    // v0.10: compras corrige el monto de un documento (p. ej. la nota del proveedor en una compra sin IVA)
+    async actualizarDocumento(docId, { monto }) {
+      const filas = ok(await sb().from('compra_documentos').update({ monto: monto == null || monto === '' ? null : num(monto) }).eq('id', docId).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede modificar este documento.');
+    },
     async quitarDocumento(docId) {
       const d = db.compras.flatMap(c => c.documentos).find(x => x.docId === docId);
       const filas = ok(await sb().from('compra_documentos').delete().eq('id', docId).select('id'));
@@ -371,6 +437,17 @@
         let msg = '';
         try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
         throw new Error(msg || 'No se pudo enviar el correo (¿está publicada la función "aviso-requisicion" en Supabase?).');
+      }
+      return data;
+    },
+    // v0.10: correo de caja chica (Edge Function "aviso-caja")
+    //   por_aprobar → coordinador · rechazado → residente, suplentes y quien lo capturó
+    async avisarCaja(id, evento) {
+      const { data, error } = await sb().functions.invoke('aviso-caja', { body: { caja_id: id, evento } });
+      if (error) {
+        let msg = '';
+        try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
+        throw new Error(msg || 'No se pudo enviar el correo (¿está publicada la función "aviso-caja" en Supabase?).');
       }
       return data;
     },
@@ -416,6 +493,51 @@
     async urlArchivo(ruta) {
       const d = ok(await sb().storage.from(BUCKET).createSignedUrl(ruta, 3600));
       return d.signedUrl;
+    },
+
+    /* Datos fiscales (v0.10): f = { id?, nombre, rfc, regimen, cp, usoCfdi, correo, notas }, pdf = constancia (File) opcional */
+    async guardarFiscal(f, pdf) {
+      const prev = f.id ? db.fiscal.find(x => x.id === f.id) : null;
+      const id = (prev && prev.id) || uid();
+      const fila = { nombre: str(f.nombre), rfc: str(f.rfc).toUpperCase(), regimen: str(f.regimen), cp: str(f.cp), uso_cfdi: str(f.usoCfdi), correo: str(f.correo), notas: str(f.notas) };
+      let subido = null;
+      try {
+        if (pdf) { subido = await subirArchivo('fiscal', id, pdf); fila.constancia = [{ ruta: subido.ruta, nombre: subido.nombre }]; }
+        if (!prev) {
+          if (!db.fiscal.length) fila.predeterminada = true;   // la primera es la predeterminada
+          okFiscal(await sb().from('datos_fiscales').insert(Object.assign({ id }, fila)).select('id'));
+        } else {
+          const filas = okFiscal(await sb().from('datos_fiscales').update(fila).eq('id', id).select('id'));
+          if (!filas.length) throw new Error('Tu rol no puede editar datos fiscales.');
+        }
+      } catch (e) {
+        if (subido) await borrarArchivos([subido.ruta]).catch(() => {});
+        throw e;
+      }
+      // La constancia anterior se borra solo cuando la nueva ya quedó registrada
+      if (prev && pdf && prev.constancia.length) await borrarArchivos(prev.constancia.map(a => a.ruta)).catch(() => {});
+      return id;
+    },
+    async predeterminarFiscal(id) {
+      const prev = db.fiscal.find(x => x.predeterminada);
+      if (prev && prev.id === id) return;
+      if (prev) {
+        const filas = okFiscal(await sb().from('datos_fiscales').update({ predeterminada: false }).eq('id', prev.id).select('id'));
+        if (!filas.length) throw new Error('Tu rol no puede cambiar la razón social predeterminada.');
+      }
+      try {
+        const filas = okFiscal(await sb().from('datos_fiscales').update({ predeterminada: true }).eq('id', id).select('id'));
+        if (!filas.length) throw new Error('No se encontró esa razón social; recarga la página.');
+      } catch (e) {
+        if (prev) await sb().from('datos_fiscales').update({ predeterminada: true }).eq('id', prev.id);   // deja la anterior como estaba
+        throw e;
+      }
+    },
+    async borrarFiscal(id) {
+      const f = db.fiscal.find(x => x.id === id);
+      const filas = okFiscal(await sb().from('datos_fiscales').delete().eq('id', id).select('id'));
+      if (!filas.length) throw new Error(f && f.predeterminada ? 'La predeterminada no se puede borrar: primero elige otra.' : 'Tu rol no puede borrar datos fiscales.');
+      if (f) await borrarArchivos(f.constancia.map(a => a.ruta)).catch(() => {});
     },
 
     /* Configuración de la empresa */
