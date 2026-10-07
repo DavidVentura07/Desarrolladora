@@ -1624,3 +1624,9 @@ body.welcome-open { overflow: hidden; }
   .kitem { flex-direction: column; }
   .k-side { width: 100%; flex-direction: row; justify-content: space-between; align-items: center; }
 }
+
+/* v1.0: "Guardar y volver" en el detalle de la compra */
+.c-guardar { display: flex; align-items: center; justify-content: flex-end; gap: 14px; flex-wrap: wrap; margin: 4px 0 22px; }
+.c-guardar .muted { display: inline-flex; align-items: center; gap: 6px; }
+.c-guardar .muted svg { width: 14px; height: 14px; }
+@media (max-width: 900px) { .c-guardar { justify-content: stretch; } .c-guardar .btn { flex: 1; justify-content: center; } }

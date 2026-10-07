@@ -98,8 +98,8 @@
     { id: 'requisitado', label: 'Requisitado', ico: 'clip' },
     { id: 'autorizado', label: 'Autorizado', ico: 'shield' },
     { id: 'cotizado', label: 'Cotizado', ico: 'file' },
-    { id: 'facturado', label: 'Facturado', ico: 'receipt' },
     { id: 'pagado', label: 'Pagado', ico: 'check' },
+    { id: 'facturado', label: 'Facturado', ico: 'receipt' },
     { id: 'recibido', label: 'Recibido en obra', ico: 'truck' }
   ];
   // Fuera del flujo: aún no se envía, o el coordinador lo rechazó
@@ -141,11 +141,12 @@
   const obra = id => D.obras.find(o => o.id === id);
   const req = id => D.requisiciones.find(r => r.id === id);
   const compra = id => (id ? D.compras.find(c => c.id === id) : null);
-  // Los documentos se suben en cualquier orden (v0.7); el estado es el paso más alto que ya tiene
-  const compraEstado = c => (c.remision ? 'recibido' : c.pago ? 'pagado' : c.factura ? 'facturado' : 'cotizado');
-  // Filtros del listado de compras (pueden coincidir: una compra recibida puede seguir por pagar)
+  // Los documentos se suben en cualquier orden (v0.7); el estado es el paso más alto que ya tiene.
+  // v1.0: el orden real es cotización → pago → factura (el proveedor factura después de cobrar) → remisión
+  const compraEstado = c => (c.remision ? 'recibido' : c.factura ? 'facturado' : c.pago ? 'pagado' : 'cotizado');
+  // Filtros del listado de compras (pueden coincidir: una compra recibida puede seguir sin factura)
   const FILTRO_EST = {
-    cotizado: c => c.iva && !c.factura, facturado: c => !c.pago && (!!c.factura || !c.iva), pagado: c => !!c.pago, recibido: c => !!c.remision,
+    porpagar: c => !c.pago, pagado: c => !!c.pago, sinfac: c => c.iva && !!c.pago && !c.factura, recibido: c => !!c.remision,
     dif: c => diferencias(c).length > 0
   };
   // Diferencias de montos o datos en una compra; se marcan en rojo (cuentan los centavos)
@@ -220,6 +221,7 @@
   /* ---------- Estado de la interfaz (por sesión) ---------- */
   const UI = Object.assign({ wk: null, obra: '', tipo: 'todas', cObra: '', cWk: '', cEst: 'todas', q: '', chObra: '' },
     (() => { try { return JSON.parse(sessionStorage.getItem('galitha.req.ui')) || {}; } catch { return {}; } })());
+  if (UI.cEst !== 'todas' && UI.cEst !== 'dif' && !FILTRO_EST[UI.cEst]) UI.cEst = 'todas';   // filtros de antes de la v1.0
   const saveUI = () => { try { sessionStorage.setItem('galitha.req.ui', JSON.stringify(UI)); } catch { } };
   const curWk = () => UI.wk || hoyWk();
 
@@ -585,7 +587,8 @@
     const pagadas = vis.filter(c => c.pago);
     const totalPag = pagadas.reduce((a, c) => a + c.pago.monto, 0);
     const pagWkL = pagadas.filter(c => wkKey(c) === wkKey(hw));
-    const porPagarM = vis.filter(c => c.factura && !c.pago).reduce((a, c) => a + c.factura.total, 0);
+    // Lo que ya se pagó y el proveedor todavía no factura (las compras sin IVA no llevan factura)
+    const sinFacL = vis.filter(FILTRO_EST.sinfac), sinFacM = sinFacL.reduce((a, c) => a + c.pago.monto, 0);
     const conDif = vis.filter(c => diferencias(c).length).length;
     const semanas = [...new Set(vis.map(c => wkKey(c)))].sort((a, b) => b - a);
     const varias = obrasMias().length > 1;
@@ -608,12 +611,12 @@
         <section class="hero">
           <div class="hero-main rv" style="--d:0">
             <div class="deco">${api.markSVG()}</div>
-            <div><p class="h-eyebrow">Cotización elegida → factura y XML → pago → remisión</p><h1>Compras<br>y facturas</h1></div>
+            <div><p class="h-eyebrow">Cotización elegida → pago → factura y XML → remisión</p><h1>Compras<br>y facturas</h1></div>
             <p class="h-sum"><span class="h-count">Pagado en total: <b class="h-money">${money(totalPag)}</b></span><span class="pill">${pagadas.length} pagos</span><span class="pill">${vis.filter(c => c.factura && c.factura.uuid).length} XML leídos</span></p>
           </div>
           <div class="sqs-h">
             <div class="sq sq--ok rv" style="--d:80"><p>Pagado<br>semana ${hw.semana}</p><div class="sq-row"><strong class="sq-money">${moneyK(pagWkL.reduce((a, c) => a + c.pago.monto, 0))}</strong><small>${pagWkL.length} ${pagWkL.length === 1 ? 'pago' : 'pagos'}</small></div></div>
-            <div class="sq sq--sun rv" style="--d:140"><p>Facturado<br>por pagar</p><div class="sq-row"><strong class="sq-money">${moneyK(porPagarM)}</strong><button class="sq-go" type="button" data-est-go="facturado" aria-label="Ver lo que falta pagar">${I.arrow}</button></div></div>
+            <div class="sq sq--sun rv" style="--d:140"><p>Pagado<br>sin factura</p><div class="sq-row"><strong class="sq-money">${moneyK(sinFacM)}</strong><small>${sinFacL.length} ${sinFacL.length === 1 ? 'compra' : 'compras'}</small><button class="sq-go" type="button" data-est-go="sinfac" aria-label="Ver las compras pagadas sin factura">${I.arrow}</button></div></div>
           </div>
         </section>
 
@@ -630,7 +633,7 @@
           <label class="search">${I.search}<input type="search" data-q placeholder="Proveedor, folio, UUID o material" value="${esc(UI.q)}" aria-label="Buscar compras"></label>
         </div>
         <div class="filterbar rv" style="--d:180">
-          <div class="seg" role="group" aria-label="Estado">${[['todas', 'Todas'], ['cotizado', 'Sin factura'], ['facturado', 'Por pagar'], ['pagado', 'Pagadas'], ['recibido', 'Recibidas']].map(([k, l]) => `<button type="button" data-est="${k}" aria-pressed="${UI.cEst === k}">${l}</button>`).join('')}</div>
+          <div class="seg" role="group" aria-label="Estado">${[['todas', 'Todas'], ['porpagar', 'Por pagar'], ['pagado', 'Pagadas'], ['sinfac', 'Sin factura'], ['recibido', 'Recibidas']].map(([k, l]) => `<button type="button" data-est="${k}" aria-pressed="${UI.cEst === k}">${l}</button>`).join('')}</div>
           ${conDif || UI.cEst === 'dif' ? `<button type="button" class="dif-f" data-est="dif" aria-pressed="${UI.cEst === 'dif'}">${I.alert}<span>Con diferencias <b>${conDif}</b></span></button>` : ''}
           <span class="fb-sep"></span>
           ${varias ? `<label class="psel${UI.cObra ? ' on' : ''}"><span class="sr">Obra</span><select data-rf="cObra"><option value="">Obra</option>${obrasMias().map(o => `<option value="${esc(o.id)}"${UI.cObra === o.id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>` : ''}
@@ -763,7 +766,7 @@
       ? `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}" title="Abrir ${esc(a.nombre)}">${I[icon]}<span>${esc(a.nombre)}</span><em>${tipo}</em></button>`
       : '';
     // Se pueden subir en cualquier orden; se resalta el primero que falta
-    const next = !c.cotizacion ? 1 : !f && c.iva ? 2 : !c.pago ? 3 : !c.remision ? 4 : 0;
+    const next = !c.cotizacion ? 1 : !c.pago ? 2 : !f && c.iva ? 3 : !c.remision ? 4 : 0;
     const difs = diferencias(c), difEn = new Set(difs.map(x => x.doc));
     const res = o.residente || {};
     const recibida = !!c.remision;
@@ -810,17 +813,18 @@
           ${doc(1, 'Cotización elegida', 'La que se va a pagar', c.cotizacion,
             c.cotizacion ? `<div class="files">${archivosDe(c.cotizacion, 'file', 'PDF')}</div><p class="dmeta"><b>${money(c.cotizacion.monto)}</b> · ${esc(fDate(c.cotizacion.fecha))} · ${esc(c.cotizacion.subidoPor)}</p>` : '',
             !c.cotizacion ? (esCompras() ? drop('cot', 'Subir cotización (PDF)') : lock('Compras sube la cotización.')) : '', 'cotizacion')}
-          ${!c.iva && !f ? `<div class="doc doc--siniva rv" style="--d:140"><div class="doc-h"><span class="doc-n">–</span><div><h3>Sin factura</h3><small>Compra sin IVA</small></div></div><p class="dmeta">Las compras sin IVA no llevan factura ni XML. Se controla con la cotización y el comprobante de pago.</p></div>` : doc(2, 'Factura y XML', 'Los datos se leen del XML', f,
+          ${doc(2, 'Comprobante de pago', 'Al subirlo, el material ya es seguro', c.pago,
+            c.pago ? `<div class="files">${archivosDe(c.pago, 'cash', 'PDF')}</div><p class="dmeta"><b>${money(c.pago.monto)}</b> · ${esc(fDate(c.pago.fecha))}${c.pago.referencia ? ' · ' + esc(c.pago.referencia) : ''}</p>` : '',
+            !c.pago ? (esCompras() ? drop('pago', 'Subir comprobante', 'cash') : lock('Compras o Dirección suben el comprobante de pago.')) : '', 'pago')}
+          ${!c.iva && !f ? `<div class="doc doc--siniva rv" style="--d:180"><div class="doc-h"><span class="doc-n">–</span><div><h3>Sin factura</h3><small>Compra sin IVA</small></div></div><p class="dmeta">Las compras sin IVA no llevan factura ni XML. Se controla con la cotización y el comprobante de pago.</p></div>` : doc(3, 'Factura y XML', 'Los datos se leen del XML', f,
             f ? `<div class="files">${fch('file', f.pdfArchivo, 'PDF') || sinArch('Falta el PDF')}${fch('xml', f.xmlArchivo, 'XML')}</div>
               <p class="dmeta">Folio <b>${esc((f.serie || '') + ' ' + f.folio)}</b> · ${esc(fDate(f.fecha))}${f.uuid ? `<br>UUID <span class="mono">${esc(f.uuid.slice(0, 8))}…</span>` : ''}</p>` : '',
             !f ? (esCompras() ? drop('xml', 'Subir XML y PDF', 'xml') : lock('Compras sube la factura.')) : '', 'factura')}
-          ${doc(3, 'Comprobante de pago', 'Al subirlo, el material ya es seguro', c.pago,
-            c.pago ? `<div class="files">${archivosDe(c.pago, 'cash', 'PDF')}</div><p class="dmeta"><b>${money(c.pago.monto)}</b> · ${esc(fDate(c.pago.fecha))}${c.pago.referencia ? ' · ' + esc(c.pago.referencia) : ''}</p>` : '',
-            !c.pago ? (esCompras() ? drop('pago', 'Subir comprobante', 'cash') : lock('Compras o Dirección suben el comprobante de pago.')) : '', 'pago')}
-          ${doc(4, 'Remisión firmada', 'Foto desde la obra al recibir', c.remision,
+          ${doc(4, 'Remisión firmada', 'Una o varias fotos desde la obra', c.remision,
             c.remision ? `<div class="files">${archivosDe(c.remision, 'camera', 'FOTO')}</div><p class="dmeta">Recibió <b>${esc(c.remision.recibio)}</b> · ${esc(fDate(c.remision.fecha))}</p>` : '',
-            !c.remision ? (puedeRemision(c.obraId) ? drop('rem', soloResidente() ? 'Tomar foto de la remisión' : 'Subir foto de la remisión', 'camera') : lock('El residente sube la remisión.')) : '', 'remision')}
+            !c.remision ? (puedeRemision(c.obraId) ? drop('rem', 'Subir fotos de la remisión', 'camera') : lock('El residente sube la remisión.')) : '', 'remision')}
         </div>
+        ${esCompras() || puedeRemision(c.obraId) ? `<div class="c-guardar rv" style="--d:240"><span class="muted small">${I.check}Cada documento se guarda en cuanto termina de subir.</span><button type="button" class="btn btn--solid" data-guardar>${I.check}<span>Guardar y volver</span></button></div>` : ''}
 
         <div class="d-grid">
           <div class="d-main">
@@ -884,9 +888,17 @@
           b.addEventListener('click', () => subir(c.id, k));
           b.addEventListener('dragover', ev => { ev.preventDefault(); b.classList.add('over'); });
           b.addEventListener('dragleave', () => b.classList.remove('over'));
-          b.addEventListener('drop', ev => { ev.preventDefault(); b.classList.remove('over'); const fl = ev.dataTransfer.files[0]; if (fl) recibirArchivo(c.id, k, fl); });
+          b.addEventListener('drop', ev => { ev.preventDefault(); b.classList.remove('over'); const fls = ev.dataTransfer.files; if (fls.length) recibirArchivo(c.id, k, k === 'rem' ? [...fls] : fls[0]); });
         });
         $$('[data-ruta]', sec).forEach(b => b.addEventListener('click', () => abrirArchivo(b.dataset.ruta)));
+        // Todo ya se guarda solo; el botón da la confirmación (espera la subida en curso) y regresa al listado
+        const gv = $('[data-guardar]', sec);
+        if (gv) gv.addEventListener('click', async () => {
+          gv.disabled = true;
+          if (subiendo) { toast('Terminando de subir…'); if (!(await subiendo)) { gv.disabled = false; return; } }
+          toast('✓ Todo quedó guardado.');
+          location.hash = '#/compras';
+        });
         $$('[data-iva]', sec).forEach(b => b.addEventListener('click', async () => {
           const v = b.dataset.iva === '1';
           if (v === c.iva) return;
@@ -964,11 +976,16 @@
     const fp = $('#filepick');
     fp.value = '';
     fp.accept = k === 'rem' ? 'image/*,application/pdf' : 'application/pdf,image/*';
-    if (k === 'rem') fp.setAttribute('capture', 'environment'); else fp.removeAttribute('capture');
-    fp.onchange = () => { if (fp.files[0]) recibirArchivo(cid, k, fp.files[0]); };
+    // v1.0: la remisión admite varias fotos (hojas o evidencia); sin 'capture' el celular deja elegir cámara o fototeca
+    fp.removeAttribute('capture');
+    fp.multiple = k === 'rem';
+    fp.onchange = () => { if (fp.files.length) recibirArchivo(cid, k, k === 'rem' ? [...fp.files] : fp.files[0]); };
     fp.click();
   }
+  let subiendo = null;   // subida en curso ("Guardar y volver" la espera)
   async function recibirArchivo(cid, k, file) {
+    const files = Array.isArray(file) ? file : [file];
+    file = files[0];
     if (k === 'xml' || /\.xml$/i.test(file.name)) return drXml(cid, file);
     const c = compra(cid); if (!c) return;
     let datos = {}, monto = null, referencia = '';
@@ -984,14 +1001,16 @@
     }
     if (k === 'rem') datos = { recibio: yo() };
     const tipo = { cot: 'cotizacion', pago: 'pago', rem: 'remision' }[k];
-    toast(`Subiendo "${file.name}"…`);
-    const ok = await hacer(() => R.agregarDocumento(cid, tipo, { archivos: [file], fecha: today(), monto, referencia, datos }));
+    toast(files.length > 1 ? `Subiendo ${files.length} archivos…` : `Subiendo "${file.name}"…`);
+    subiendo = hacer(() => R.agregarDocumento(cid, tipo, { archivos: files, fecha: today(), monto, referencia, datos }));
+    const ok = await subiendo;
+    subiendo = null;
     if (!ok) return;
     api.rerender();
     if (k === 'pago') {
       toast('Pagado: ya es seguro. Enviando el correo al residente…');
       if (await avisarPago(cid)) api.rerender();
-    } else toast(k === 'rem' ? 'Remisión guardada: el material quedó como recibido en obra.' : 'Cotización guardada.');
+    } else toast(k === 'rem' ? `Remisión guardada${files.length > 1 ? ` (${files.length} fotos)` : ''}: el material quedó como recibido en obra.` : 'Cotización guardada.');
   }
 
   // Correo automático al residente con el pago (si falla, el pago queda y se puede reintentar)
@@ -1173,8 +1192,8 @@
       ['Requisitado', r.enviadaEn ? `Lo pidió ${r.creadaPor} · ${fDateT(r.enviadaEn)}` : '', 'Lo pide el residente al enviar la requisición'],
       ['Autorizado', p.aprobacion === 'aprobada' ? `${p.revisadaPor} · ${fDateT(p.revisadaEn)}` : '', 'Espera la revisión del coordinador de obra'],
       ['Cotizado', c && c.cotizacion ? `${c.proveedor.nombre} · ${money(c.cotizacion.monto)} · ${fDate(c.cotizacion.fecha)}` : '', 'Compras registra la cotización elegida'],
-      ['Facturado', f ? `Factura ${f.serie || ''} ${f.folio} · ${fDate(f.fecha)}` : '', 'Compras sube la factura y su XML'],
       ['Pagado: ya es seguro', c && c.pago ? `${money(c.pago.monto)} · ${fDateL(c.pago.fecha)}` : '', 'Compras o Dirección suben el comprobante de pago'],
+      ['Facturado', f ? `Factura ${f.serie || ''} ${f.folio} · ${fDate(f.fecha)}` : '', 'Compras sube la factura y su XML'],
       ['Recibido en obra', c && c.remision ? `Recibió ${c.remision.recibio} · ${fDate(c.remision.fecha)}` : '', entrega(p) ? `Entrega programada: ${fDateL(entrega(p))}` : 'Se sube la foto de la remisión firmada']
     ];
     // Los documentos de la compra se suben en cualquier orden: cada paso cuenta por sí solo
