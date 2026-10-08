@@ -315,6 +315,23 @@
       const filas = ok(await sb().from('requisiciones').delete().eq('id', id).select('id'));
       if (!filas.length) throw new Error('Solo se pueden borrar requisiciones en borrador.');
     },
+    // v0.12: borrar una requisición completa (admin técnico; la base lo permite a los jefes). La base borra en cascada
+    // sus materiales, avisos y gastos de caja chica; aquí se borran además las compras que solo tenían materiales
+    // de ella (con sus documentos) y los archivos. Las compras que mezclan otra requisición se quedan sin estos materiales.
+    async borrarRequisicionCompleta(id) {
+      const r = db.requisiciones.find(x => x.id === id);
+      if (!r) throw new Error('No se encontró la requisición.');
+      const pids = new Set(r.partidas.map(p => p.id));
+      const compras = db.compras.filter(c => c.partidas.length && c.partidas.every(pid => pids.has(pid)));
+      const cajas = db.caja.filter(k => k.partidaId && pids.has(k.partidaId));
+      const filas = ok(await sb().from('requisiciones').delete().eq('id', id).select('id'));
+      if (!filas.length) throw new Error('Solo Dirección y el admin técnico borran requisiciones ya enviadas.');
+      for (const c of compras) {
+        ok(await sb().from('compras').delete().eq('id', c.id).select('id'));
+        await borrarArchivos(c.documentos.flatMap(d => d.archivos.map(a => a.ruta)).filter(ru => ru.includes(`/${c.id}/`))).catch(() => {});
+      }
+      await borrarArchivos(cajas.flatMap(k => k.archivos.map(a => a.ruta))).catch(() => {});
+    },
     // v0.8: compras marca un material como cambiado por otro o no suministrado (o lo regresa a normal)
     async marcarSuministro(id, suministro, sustituto, nota) {
       const filas = ok(await sb().from('partidas').update({ suministro, sustituto: str(sustituto), nota_suministro: str(nota) }).eq('id', id).select('id'));

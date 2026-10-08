@@ -465,7 +465,8 @@
               ${editable ? `<button class="btn" type="button" data-edit>${I.edit}<span>Editar</span></button>` : ''}
               ${esAdmin() ? `<button class="btn" type="button" data-mover title="Mover la requisición y sus compras a otra semana">${I.left}<span>Mover de semana</span></button>` : ''}
               ${!editable && esAdmin() && ['enviada', 'revisada'].includes(r.estado) ? `<button class="btn" type="button" data-corregir title="Corrección del admin técnico: queda en la bitácora">${I.edit}<span>Corregir</span></button>` : ''}
-              ${editable && r.estado === 'borrador' ? `<button class="ibtn ibtn--line" type="button" data-borrar title="Borrar borrador" aria-label="Borrar borrador">${I.trash}</button>` : ''}
+              ${editable && r.estado === 'borrador' ? `<button class="ibtn ibtn--line" type="button" data-borrar title="Borrar borrador" aria-label="Borrar borrador">${I.trash}</button>`
+                : esAdmin() ? `<button class="ibtn ibtn--line" type="button" data-borrar-todo title="Borrar la requisición completa (admin técnico)" aria-label="Borrar requisición completa">${I.trash}</button>` : ''}
               ${editable ? `<button class="btn btn--solid" type="button" data-enviar>${I.send}<span>${r.estado === 'devuelta' ? 'Reenviar' : 'Enviar'}</span></button>` : ''}
               ${revisando ? `<button class="btn" type="button" data-devolver>${I.undo}<span>Devolver para corregir</span></button>
                 <button class="btn btn--solid" type="button" data-terminar${pend ? ' disabled' : ''} title="${pend ? 'Primero aprueba o rechaza todos los materiales' : ''}">${I.shield}<span>Terminar revisión</span></button>` : ''}
@@ -536,6 +537,23 @@
         on('[data-borrar]', async () => {
           if (!(await api.confirmar({ titulo: 'Borrar borrador', texto: `Se borrará <b>${esc(r.folio)}</b> con sus ${n} materiales.`, ok: 'Borrar', peligro: true }))) return;
           if (await hacer(() => R.borrarRequisicion(r.id), 'Borrador eliminado.')) location.hash = '#/requisiciones';
+        });
+        // v0.12: el admin técnico borra una requisición ya enviada con todo lo que salió de ella (para pruebas o errores)
+        on('[data-borrar-todo]', async () => {
+          const pids = new Set(r.partidas.map(p => p.id));
+          const cs = D.compras.filter(c => c.partidas.some(pid => pids.has(pid)));
+          const solas = cs.filter(c => c.partidas.every(pid => pids.has(pid)));
+          const ks = D.caja.filter(k => k.partidaId && pids.has(k.partidaId));
+          const lista = [`<b>${n}</b> ${n === 1 ? 'material' : 'materiales'} y sus avisos`,
+            solas.length ? `<b>${solas.length}</b> ${solas.length === 1 ? 'compra' : 'compras'} con sus documentos y archivos (${solas.map(c => esc(c.proveedor.nombre || 'sin proveedor')).join(', ')})` : '',
+            ks.length ? `<b>${ks.length}</b> ${ks.length === 1 ? 'gasto' : 'gastos'} de caja chica con sus fotos` : ''].filter(Boolean);
+          const mixtas = cs.length - solas.length;
+          const folio = await api.preguntar({ titulo: 'Borrar requisición completa',
+            texto: `Se borrará <b>${esc(r.folio)}</b> para siempre, con: ${lista.join('; ')}.${mixtas ? ` ${mixtas === 1 ? 'Una compra' : mixtas + ' compras'} también tiene materiales de otra requisición: se queda, solo sin estos materiales.` : ''} Esto no se puede deshacer.`,
+            etiqueta: `Escribe el folio ${r.folio} para confirmar`, ok: 'Borrar todo', requerido: true, peligro: true });
+          if (folio == null) return;
+          if (folio.trim().toUpperCase() !== r.folio.toUpperCase()) { toast('El folio no coincide; no se borró nada.'); return; }
+          if (await hacer(() => R.borrarRequisicionCompleta(r.id), `${r.folio} borrada por completo.`)) location.hash = '#/requisiciones';
         });
         on('[data-devolver]', async () => {
           const c = await api.preguntar({ titulo: 'Devolver para corregir', texto: `El residente podrá corregir <b>${esc(r.folio)}</b> y volver a enviarla. Lo que ya aprobaste se conserva, salvo los materiales que cambie.`, etiqueta: '¿Qué debe corregir?', campo: 'area', ok: 'Devolver', requerido: true });
