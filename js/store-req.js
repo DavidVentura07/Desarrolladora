@@ -433,20 +433,20 @@
       if (!filas.length) throw new Error('Tu rol no puede quitar este documento.');
       if (d) await borrarArchivos(d.archivos.map(a => a.ruta)).catch(() => {});
     },
-    // Correo automático al residente (y suplentes vigentes) con el pago: Edge Function "aviso-pago"
+    // Aviso automático (WhatsApp o correo) al residente y suplentes vigentes con el pago: Edge Function "aviso-pago"
     async avisarPago(compraId) {
       const { data, error } = await sb().functions.invoke('aviso-pago', { body: { compra_id: compraId } });
       if (error) {
         let msg = '';
         try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
-        throw new Error(msg || 'No se pudo enviar el correo (¿está publicada la función "aviso-pago" en Supabase?).');
+        throw new Error(msg || 'No se pudo enviar el aviso (¿está publicada la función "aviso-pago" en Supabase?).');
       }
       const c = find('compras', compraId);
       if (c && c.pago) c.pago.aviso = data.aviso;
       return data;
     },
-    // Correo automático de una requisición: Edge Function "aviso-requisicion"
-    //   enviada → coordinador · devuelta → residente y suplentes · revisada → residente y suplentes si hubo rechazos
+    // Aviso de una requisición, WhatsApp o correo: Edge Function "aviso-requisicion"
+    //   enviada → coordinador · devuelta → residente y suplentes · revisada → residente y suplentes si hubo rechazos, y compras si hay aprobados
     async avisarRequisicion(id, evento) {
       const { data, error } = await sb().functions.invoke('aviso-requisicion', { body: { requisicion_id: id, evento } });
       if (error) {
@@ -456,14 +456,14 @@
       }
       return data;
     },
-    // v0.10: correo de caja chica (Edge Function "aviso-caja")
-    //   por_aprobar → coordinador · rechazado → residente, suplentes y quien lo capturó
+    // Aviso de caja chica, WhatsApp o correo (Edge Function "aviso-caja")
+    //   por_aprobar → coordinador · rechazado → residente, suplentes y quien lo capturó · por_verificar → compras
     async avisarCaja(id, evento) {
       const { data, error } = await sb().functions.invoke('aviso-caja', { body: { caja_id: id, evento } });
       if (error) {
         let msg = '';
         try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
-        throw new Error(msg || 'No se pudo enviar el correo (¿está publicada la función "aviso-caja" en Supabase?).');
+        throw new Error(msg || 'No se pudo enviar el aviso (¿está publicada la función "aviso-caja" en Supabase?).');
       }
       return data;
     },

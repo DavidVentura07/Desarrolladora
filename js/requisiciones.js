@@ -530,8 +530,8 @@
           if (await hacer(async () => { folio = await R.moverRequisicion(r.id, w.anio, w.semana); }, '')) { toast(`Movida a la semana ${w.semana}: ${folio}.`); UI.wk = { anio: w.anio, semana: w.semana }; saveUI(); api.rerender(); }
         });
         on('[data-enviar]', async () => {
-          if (!(await api.confirmar({ titulo: r.estado === 'devuelta' ? 'Reenviar requisición' : 'Enviar requisición', texto: `Se enviará <b>${esc(r.folio)}</b> con ${n} materiales al coordinador de obra, con aviso por correo. Después ya no podrás modificarla; lo que falte irá en una extraordinaria.`, ok: 'Enviar' }))) return;
-          if (await hacer(() => R.cambiarEstado(r.id, 'enviada'), 'Requisición enviada. Avisando al coordinador por correo…')) { api.rerender(); avisar(r.id, 'enviada'); }
+          if (!(await api.confirmar({ titulo: r.estado === 'devuelta' ? 'Reenviar requisición' : 'Enviar requisición', texto: `Se enviará <b>${esc(r.folio)}</b> con ${n} materiales al coordinador de obra, con aviso por WhatsApp o correo. Después ya no podrás modificarla; lo que falte irá en una extraordinaria.`, ok: 'Enviar' }))) return;
+          if (await hacer(() => R.cambiarEstado(r.id, 'enviada'), 'Requisición enviada. Avisando al coordinador…')) { api.rerender(); avisar(r.id, 'enviada'); }
         });
         on('[data-borrar]', async () => {
           if (!(await api.confirmar({ titulo: 'Borrar borrador', texto: `Se borrará <b>${esc(r.folio)}</b> con sus ${n} materiales.`, ok: 'Borrar', peligro: true }))) return;
@@ -540,12 +540,12 @@
         on('[data-devolver]', async () => {
           const c = await api.preguntar({ titulo: 'Devolver para corregir', texto: `El residente podrá corregir <b>${esc(r.folio)}</b> y volver a enviarla. Lo que ya aprobaste se conserva, salvo los materiales que cambie.`, etiqueta: '¿Qué debe corregir?', campo: 'area', ok: 'Devolver', requerido: true });
           if (c == null) return;
-          if (await hacer(() => R.cambiarEstado(r.id, 'devuelta', c), 'Requisición devuelta. Avisando al residente por correo…')) { api.rerender(); avisar(r.id, 'devuelta'); }
+          if (await hacer(() => R.cambiarEstado(r.id, 'devuelta', c), 'Requisición devuelta. Avisando al residente…')) { api.rerender(); avisar(r.id, 'devuelta'); }
         });
         on('[data-terminar]', async () => {
           const ap = r.partidas.filter(p => p.aprobacion === 'aprobada').length;
-          if (!(await api.confirmar({ titulo: 'Terminar revisión', texto: `Quedan <b>${ap}</b> materiales aprobados y <b>${n - ap}</b> rechazados. Compras podrá cotizar los aprobados.${n - ap ? ' Al residente le llega un correo con los rechazados y sus motivos.' : ''}`, ok: 'Terminar revisión' }))) return;
-          if (await hacer(() => R.cambiarEstado(r.id, 'revisada'), 'Revisión terminada: compras ya puede cotizar.')) { api.rerender(); if (n - ap) avisar(r.id, 'revisada'); }
+          if (!(await api.confirmar({ titulo: 'Terminar revisión', texto: `Quedan <b>${ap}</b> materiales aprobados y <b>${n - ap}</b> rechazados. Compras podrá cotizar los aprobados${ap ? ' y le llega un aviso' : ''}.${n - ap ? ' Al residente le llega un aviso con los rechazados y sus motivos.' : ''}`, ok: 'Terminar revisión' }))) return;
+          if (await hacer(() => R.cambiarEstado(r.id, 'revisada'), 'Revisión terminada: compras ya puede cotizar.')) { api.rerender(); avisar(r.id, 'revisada'); }
         });
         // Aprobar o rechazar material por material
         $$('[data-rev]', sec).forEach(b => b.addEventListener('click', async e => {
@@ -595,7 +595,7 @@
   }
 
   // Aviso automático de la requisición (WhatsApp o correo); si falla, el cambio de estado ya quedó guardado
-  const AVISO_EV = { enviada: 'Aviso al coordinador', devuelta: 'Aviso de devolución', revisada: 'Aviso de rechazos' };
+  const AVISO_EV = { enviada: 'Aviso al coordinador', devuelta: 'Aviso de devolución', revisada: 'Aviso de revisión' };
   const avisoPara = xs => xs.map(p => `${p.nombre || p.correo || p.telefono}${p.canal === 'whatsapp' ? ' (WhatsApp)' : p.canal === 'correo' ? ' (correo)' : ''}`).join(', ');
   async function avisar(id, evento) {
     try {
@@ -947,10 +947,10 @@
                   <div class="msg-h"><span class="p-av">${icoSz('wa', 18)}</span><div><b>${esc(res.nombre || 'Residente')}</b><small>${c.pago ? 'Avísale que ya está pagado' : 'Se avisa al registrar el pago'}</small></div></div>
                   <div class="msg">${esc(msg)}<time>${c.pago ? esc(fDate(c.pago.fecha)) : 'pendiente'}</time></div>
                 </div>
-                ${!c.pago ? `<div class="auto">${I.bell}<span>Al subir el comprobante de pago se le manda un correo automático.</span></div>`
-                  : c.pago.aviso ? `<div class="auto auto--ok">${I.mail}<span>Correo enviado a ${c.pago.aviso.para.map(p => `<b>${esc(p.nombre || p.correo)}</b>`).join(' y ')} · ${esc(fDateT(c.pago.aviso.en))}</span></div>`
-                  : `<div class="auto auto--warn">${I.mail}<span>Todavía no se manda el correo de este pago.</span></div>`}
-                <div class="acts">${c.pago && esCompras() ? `<button type="button" class="btn" data-aviso>${I.mail}<span>${c.pago.aviso ? 'Reenviar correo' : 'Enviar correo'}</span></button>` : ''}${tel ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/52${esc(tel)}?text=${encodeURIComponent(msg)}">${I.wa}<span>Enviar por WhatsApp</span></a>` : `<span class="muted small">Agrega el celular del residente en <a class="link-u" href="#/usuarios">Usuarios</a> para enviarlo por WhatsApp.</span>`}</div>
+                ${!c.pago ? `<div class="auto">${I.bell}<span>Al subir el comprobante de pago se le avisa por WhatsApp (o por correo si no tiene celular).</span></div>`
+                  : c.pago.aviso ? `<div class="auto auto--ok">${c.pago.aviso.para.every(p => p.canal === 'whatsapp') ? I.wa : I.mail}<span>Aviso enviado a <b>${esc(avisoPara(c.pago.aviso.para))}</b> · ${esc(fDateT(c.pago.aviso.en))}</span></div>`
+                  : `<div class="auto auto--warn">${I.mail}<span>Todavía no se manda el aviso de este pago.</span></div>`}
+                <div class="acts">${c.pago && esCompras() ? `<button type="button" class="btn" data-aviso>${I.bell}<span>${c.pago.aviso ? 'Reenviar aviso' : 'Enviar aviso'}</span></button>` : ''}${tel ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/52${esc(tel)}?text=${encodeURIComponent(msg)}">${I.wa}<span>Escribirle por WhatsApp</span></a>` : `<span class="muted small">Agrega el celular del residente en <a class="link-u" href="#/usuarios">Usuarios</a> para avisarle por WhatsApp.</span>`}</div>
               </div>
             </section>`}
           </aside>
@@ -1134,20 +1134,20 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     if (!ok) return;
     api.rerender();
     if (k === 'pago') {
-      toast('Pagado: ya es seguro. Enviando el correo al residente…');
+      toast('Pagado: ya es seguro. Avisando al residente…');
       if (await avisarPago(cid)) api.rerender();
     } else toast(k === 'rem' ? `Remisión guardada${files.length > 1 ? ` (${files.length} fotos)` : ''}: el material quedó como recibido en obra.` : 'Cotización guardada.');
   }
 
-  // Correo automático al residente con el pago (si falla, el pago queda y se puede reintentar)
+  // Aviso automático al residente con el pago (WhatsApp o correo; si falla, el pago queda y se puede reintentar)
   async function avisarPago(cid) {
     try {
       const r = await R.avisarPago(cid);
-      toast(`Correo enviado a ${r.aviso.para.map(p => p.nombre || p.correo).join(' y ')}.`);
+      toast(`Aviso enviado a ${avisoPara(r.aviso.para)}.${r.fallas && r.fallas.length ? ' Hubo problemas: ' + r.fallas.join(' · ') : ''}`);
       await cargar();
       return true;
     } catch (e) {
-      toast(`El pago quedó registrado, pero no salió el correo: ${e.message}`);
+      toast(`El pago quedó registrado, pero no salió el aviso: ${e.message}`);
       return false;
     }
   }
@@ -1751,7 +1751,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
           <label class="fld"><span class="fld-l">Residente <em>*</em></span><select class="in" name="nuevo" required><option value="">Elige a una persona…</option>${cands.map(p => `<option value="${esc(p.id)}">${esc(p.nombre || p.correo)}</option>`).join('')}${o.residenteId ? '<option value="-">Dejar la obra sin residente</option>' : ''}</select>
             <span class="fld-h">${cands.length ? 'Solo aparecen usuarios con rol de residente.' : 'No hay otros usuarios con rol de residente: invítalos en <a class="link-u" href="#/usuarios">Usuarios</a>.'}</span></label>
           <label class="fld"><span class="fld-l">Motivo (opcional)</span><input class="in" name="nota" placeholder="Cambio de obra, baja, rotación…"></label>
-          <p class="fld-h">El cambio cuenta desde hoy. El nuevo residente ve y envía las requisiciones de la obra y recibe los avisos por correo; el anterior deja de verlas. Para una ausencia temporal mejor asigna un suplente.</p>
+          <p class="fld-h">El cambio cuenta desde hoy. El nuevo residente ve y envía las requisiciones de la obra y recibe los avisos (WhatsApp o correo); el anterior deja de verlas. Para una ausencia temporal mejor asigna un suplente.</p>
         </div></fieldset>
       </div>
       ${drFoot('Cambiar residente')}
@@ -1873,8 +1873,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
         <div class="k-top"><b>${esc(k.concepto || 'Sin concepto')}</b>${kTag(k)}<span class="tagx${k.origen === 'directo' ? ' tagx--ext' : ''}">${k.origen === 'directo' ? 'Gasto directo' : r ? 'De ' + esc(r.folio) : 'De requisición'}</span></div>
         <p class="k-sub">${k.cantidad ? `${qty(k.cantidad)} ${esc(k.unidad)} · ` : ''}${k.lugar ? esc(k.lugar) + ' · ' : ''}${k.fecha ? esc(fDate(k.fecha)) + ' · ' : ''}${k.comprobante === 'factura' ? 'Factura' : k.comprobante === 'ticket' ? 'Ticket' : 'Nota'}${k.compradoPor && k.estado !== 'por_comprar' ? ' · ' + esc(k.compradoPor) : ''}</p>
         ${k.estado === 'rechazado' && k.motivoRechazo ? `<p class="k-rej">${I.alert}<span>Rechazado: ${esc(k.motivoRechazo)}</span></p>` : ''}
-        ${(() => { const av = (k.avisos || []).find(a => a.evento === k.estado);   // v0.10: último correo del estado actual
-          return av ? `<p class="k-aviso">${I.mail}<span>Correo ${av.evento === 'rechazado' ? 'al residente' : 'al coordinador'} · ${esc(av.para.map(p => p.nombre || p.correo).join(', '))} · ${esc(fDateT(av.en))}</span></p>` : ''; })()}
+        ${(() => { const av = (k.avisos || []).find(a => a.evento === k.estado);   // último aviso del estado actual (v0.12: WhatsApp o correo)
+          return av ? `<p class="k-aviso">${av.para.every(p => p.canal === 'whatsapp') ? I.wa : I.mail}<span>Aviso ${{ rechazado: 'al residente', por_verificar: 'a compras' }[av.evento] || 'al coordinador'} · ${esc(avisoPara(av.para))} · ${esc(fDateT(av.en))}</span></p>` : ''; })()}
         ${k.archivos.length ? `<div class="k-files">${k.archivos.map(a => `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}">${I[/\.(pdf|xml)$/i.test(a.nombre) ? 'file' : 'camera']}<span>${esc(a.nombre)}</span></button>`).join('')}</div>` : ''}
       </div>
       <div class="k-side"><b class="k-monto">${k.estado === 'por_comprar' ? '—' : money(k.monto)}</b><div class="k-acts">${acts}</div></div>
@@ -1884,7 +1884,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   async function accionCaja(k, a) {
     if (!k) return;
     if (a === 'comprar' || a === 'editar') return drGasto(k);
-    if (a === 'aprobar') { if (await hacer(() => R.estadoCaja(k.id, 'por_verificar'), 'Gasto aprobado: compras ya lo ve.')) api.rerender(); return; }
+    if (a === 'aprobar') { if (await hacer(() => R.estadoCaja(k.id, 'por_verificar'), 'Gasto aprobado: compras ya lo ve.')) { api.rerender(); avisarCaja(k.id, 'por_verificar'); } return; }
     if (a === 'rechazar') {
       const m = await api.preguntar({ titulo: 'Rechazar gasto', texto: `<b>${esc(k.concepto)}</b> · ${money(k.monto)}`, etiqueta: 'Motivo (lo verá el residente)', campo: 'area', ok: 'Rechazar', requerido: true, peligro: true });
       if (m != null && await hacer(() => R.estadoCaja(k.id, 'rechazado', m), 'Gasto rechazado.')) { api.rerender(); avisarCaja(k.id, 'rechazado'); }
@@ -1899,15 +1899,16 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     }
   }
 
-  // v0.10: correo de caja chica; si falla, el cambio ya quedó y se avisa
+  // Aviso de caja chica (v0.10 correo; v0.12 WhatsApp y compras); si falla, el cambio ya quedó y se avisa
   async function avisarCaja(id, evento) {
     try {
       const r = await R.avisarCaja(id, evento);
-      toast(`Correo enviado a ${r.aviso.para.map(p => p.nombre || p.correo).join(' y ')}.`);
+      if (!r || r.omitido) return;
+      toast(`Aviso enviado a ${avisoPara(r.aviso.para)}.${r.fallas && r.fallas.length ? ' Hubo problemas: ' + r.fallas.join(' · ') : ''}`);
       await cargar();
       if (location.hash === '#/caja') api.rerender();
     } catch (e) {
-      toast(`${evento === 'rechazado' ? 'El rechazo' : 'El gasto'} quedó guardado, pero no salió el correo: ${e.message}`);
+      toast(`${evento === 'rechazado' ? 'El rechazo' : 'El gasto'} quedó guardado, pero no salió el aviso: ${e.message}`);
     }
   }
 
@@ -1965,8 +1966,9 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
         api.closeDrawer(true);
         toast(nuevo || reenviar ? 'Gasto enviado: falta que lo apruebe el coordinador.' : comprar ? 'Nota guardada: compras la verificará.' : 'Gasto actualizado.');
         if (location.hash === '#/caja') api.rerender(); else location.hash = '#/caja';
-        // v0.10: correo al coordinador (el gasto ya quedó guardado aunque el correo falle)
+        // Aviso al coordinador o, con la nota de un material, a compras (el gasto ya quedó guardado aunque el aviso falle)
         if ((nuevo || reenviar) && (caja(gid) || {}).estado === 'por_aprobar') avisarCaja(gid, 'por_aprobar');
+        if (comprar && (caja(gid) || {}).estado === 'por_verificar') avisarCaja(gid, 'por_verificar');
       });
     });
   }
