@@ -931,8 +931,17 @@
       f.addEventListener('input', api.markDirty);
       f.addEventListener('submit', async e => {
         e.preventDefault(); err.textContent = '';
-        const xs = visibles().map(b => ({ tipo: b.dataset.q, pid: $('[name=prov]', b).value, total: num($('[name=total]', b).value), iva: $('[name=iva]', b).checked,
+        let xs = visibles().map(b => ({ tipo: b.dataset.q, pid: $('[name=prov]', b).value, total: num($('[name=total]', b).value), iva: $('[name=iva]', b).checked,
           files: [...$('[name=arch]', b).files], cond: $('[name=cond]', b).value.trim(), titulo: T2[b.dataset.q] }));
+        // Separadas con un bloque totalmente en blanco (p. ej. un ajuste de concreto que usa la bomba ya registrada): se pregunta y se guarda solo el otro
+        const vacio = x => !x.pid && !(x.total > 0) && !x.files.length && !x.cond;
+        const enBlanco = xs.length > 1 ? xs.filter(vacio) : [];
+        if (enBlanco.length === xs.length) { err.textContent = 'Llena al menos una de las dos cotizaciones.'; return; }
+        if (enBlanco.length) {
+          const b0 = enBlanco[0].titulo.toLowerCase(), q0 = xs.find(x => !vacio(x)).titulo.toLowerCase();
+          if (!(await api.confirmar({ titulo: `${enBlanco[0].titulo} en blanco`, texto: `Dejaste en blanco la cotización del ${b0}. ¿Guardar solo la del ${q0}? El colado seguirá marcando que falta la del ${b0}; si no se necesita, ignora ese aviso.`, ok: `Guardar solo ${q0}` }))) return;
+          xs = xs.filter(x => !vacio(x));
+        }
         const sep = xs.length > 1, en = x => (sep ? ` del ${x.titulo.toLowerCase()}` : '');
         for (const x of xs) {
           if (!x.pid) { err.textContent = `Elige el proveedor${en(x)}.`; return; }
