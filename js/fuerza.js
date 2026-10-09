@@ -126,6 +126,7 @@
   const yoId = () => (N.perfil || {}).id;
   const esJefe = () => ['direccion', 'admin'].includes(rol());
   const esCoord = () => esJefe() || rol() === 'coordinador';
+  const esAdmin = () => rol() === 'admin';   // borra por completo (limpiar pruebas)
   const esResDe = id => {
     if (rol() === 'consulta') return false;
     const o = obra(id); if (!o) return false;
@@ -611,6 +612,9 @@
         ${t && ed ? `<fieldset class="fs"><legend><span class="mono">${vd ? 3 : 2}</span>Movimientos</legend><div class="fs-b"><div class="ft-accs">
           ${t.activo ? `<button type="button" class="btn btn--sm" data-transferir>${ic('building')}<span>Transferir a otra obra</span></button><button type="button" class="btn btn--sm btn--danger" data-baja>${ic('x')}<span>Dar de baja</span></button>`
             : `<button type="button" class="btn btn--sm" data-reingreso>${ic('undo')}<span>Reingresar a esta obra</span></button>`}</div></div></fieldset>` : ''}
+        ${t && esAdmin() ? `<fieldset class="fs"><legend>Solo admin técnico</legend><div class="fs-b">
+          <p class="fld-h">Para limpiar pruebas: borra al trabajador por completo (sus datos, movimientos y marcas de asistencia). No se puede deshacer. Para un trabajador real usa "Dar de baja".</p>
+          <button type="button" class="btn btn--sm btn--danger" data-borrar-trab>${ic('trash')}<span>Borrar definitivamente</span></button></div></fieldset>` : ''}
         ${hist.length ? `<fieldset class="fs"><legend>Historial</legend><div class="fs-b"><ul class="ft-hist">${hist.map(m => `<li><b>${esc(MOV[m.tipo] || m.tipo)}</b> · ${esc(fMes(m.fecha))}${m.detalle ? ` · ${esc(m.detalle)}` : ''}<small>${esc(m.por)}${m.publicado ? '' : ' · sin publicar'}</small></li>`).join('')}</ul></div></fieldset>` : ''}
       </div>
       ${dis ? '<footer class="dr-f"><button type="button" class="btn" data-close><span>Cerrar</span></button></footer>'
@@ -640,6 +644,17 @@
         const m = await api.preguntar({ titulo: 'Dar de baja', texto: `${esc(t.nombre)} deja de aparecer en el pase de lista. Su asistencia anterior se conserva.`, etiqueta: 'Motivo de la baja', ok: 'Dar de baja', requerido: true, peligro: true });
         if (m == null) return;
         tras(async () => { const fl = ok(await sb().from('trabajadores').update({ activo: false, motivo_baja: str(m) }).eq('id', t.id).select('id')); if (!fl.length) throw new Error('No tienes permiso para dar de baja a este trabajador.'); }, 'Baja registrada.');
+      });
+      const bd = $('[data-borrar-trab]', panel);
+      if (bd) bd.addEventListener('click', async () => {
+        const v = await api.preguntar({ titulo: 'Borrar definitivamente', texto: `Se borra a <b>${esc(t.nombre)}</b> con sus datos, movimientos y marcas de asistencia. No se puede deshacer. Escribe su nombre completo para confirmar.`, etiqueta: 'Nombre completo', ok: 'Borrar', requerido: true, peligro: true });
+        if (v == null) return;
+        if (str(v).replace(/\s+/g, ' ').toLowerCase() !== t.nombre.toLowerCase()) { toast('El nombre no coincide; no se borró nada.'); return; }
+        tras(async () => {
+          const r = await sb().rpc('borrar_trabajador', { p_trab: t.id });
+          if (r.error && /borrar_trabajador|schema cache|does not exist/i.test(r.error.message || '')) throw new Error('Falta correr supabase/13-fuerza-borrar.sql en Supabase.');
+          ok(r);
+        }, `${t.nombre} se borró por completo.`);
       });
       const br = $('[data-reingreso]', panel);
       if (br) br.addEventListener('click', async () => {
@@ -789,9 +804,21 @@
           ${corrige ? `<select class="in in--sm" data-corr="${esc(a.trabajadorId)}">${Object.entries(MARCAS).map(([k, v]) => `<option value="${k}"${k === a.marca ? ' selected' : ''}>${esc(v.l)}</option>`).join('')}</select>` : `<span class="ft-c ft-c--${MARCAS[a.marca].c}">${esc(MARCAS[a.marca].s)}</span>`}</li>`).join('')}</ul>
           ${corrige ? '<p class="fld-h">Al cambiar una marca se pide el motivo; la corrección queda en la bitácora.</p>' : ''}</div></fieldset>`}
       </div>
-      <footer class="dr-f"><button type="button" class="btn" data-close><span>Cerrar</span></button></footer>
+      <footer class="dr-f">${esAdmin() ? `<button type="button" class="btn btn--danger" data-borrar-pase>${ic('trash')}<span>Borrar este pase de lista</span></button>` : ''}<button type="button" class="btn" data-close><span>Cerrar</span></button></footer>
     </form>`, { wide: true }, panel => {
       bindResumen(panel, o);
+      const bp = $('[data-borrar-pase]', panel);
+      if (bp) bp.addEventListener('click', async () => {
+        if (!(await api.confirmar({ titulo: 'Borrar pase de lista', texto: `Se borra el pase de lista del <b>${esc(fDia(p.fecha))}</b> en ${esc(o.nombre)}: sus marcas y sus ${fs.length} ${fs.length === 1 ? 'foto' : 'fotos'}. Ese día quedará "sin pase de lista". No se puede deshacer.`, ok: 'Borrar', peligro: true }))) return;
+        bp.disabled = true;
+        try {
+          const fl = ok(await sb().from('pases_lista').delete().eq('id', p.id).select('id'));
+          if (!fl.length) throw new Error('No se pudo borrar (solo el admin técnico y Dirección).');
+          await R.borrarArchivos(fs.map(x => x.ruta)).catch(() => toast('El pase se borró, pero quedaron archivos de fotos en el servidor.'));
+        } catch (e) { bp.disabled = false; toast(e.message); return; }
+        if (p.fecha === hoy()) { borrarBorrador(p.obraId, p.fecha); PL = null; }
+        api.closeDrawer(true); toast('Pase de lista borrado.'); api.rerender();
+      });
       $$('[data-corr]', panel).forEach(s => s.addEventListener('change', async () => {
         const a = ms.find(x => x.trabajadorId === s.dataset.corr);
         const nota = await api.preguntar({ titulo: 'Corregir asistencia', texto: `${esc(a.t.nombre)}: ${esc(MARCAS[a.marca].l)} → <b>${esc(MARCAS[s.value].l)}</b>`, etiqueta: 'Motivo de la corrección', ok: 'Corregir', requerido: true });
