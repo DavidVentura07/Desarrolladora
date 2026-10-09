@@ -113,7 +113,26 @@
   const TODOS = [...EXTRA.slice(0, 1), ...EST, ...EXTRA.slice(1)];
   const estIdx = id => EST.findIndex(e => e.id === id);
   const st = (id, sm) => { const e = TODOS.find(x => x.id === id) || EST[0]; return `<span class="st st--${e.id}${sm ? ' st--sm' : ''}">${I[e.ico]}${esc(e.label)}</span>`; };
-  const UNIDADES = ['PZA', 'TON', 'KG', 'BULTO', 'SACO', 'CUBETAS', 'M3', 'M2', 'ML', 'LT', 'ROLLO', 'JGO', 'SEM', 'SERV'];
+  // Unidades: lista editable desde el formulario (colado_listas, clave 'unidades', 15-unidades.sql); estas son las de inicio
+  let UNIDADES = ['PZA', 'TON', 'KG', 'BULTO', 'SACO', 'CUBETAS', 'M3', 'M2', 'ML', 'LT', 'ROLLO', 'JGO', 'SEM', 'SERV'];
+  let unidadesEnServidor = false;
+  async function cargarUnidades() {
+    try {
+      const { data, error } = await N.sb.from('colado_listas').select('valores').eq('clave', 'unidades');
+      if (!error && data && data[0] && Array.isArray(data[0].valores)) { UNIDADES = data[0].valores; unidadesEnServidor = true; }
+    } catch (e) { /* sin 15-unidades.sql: se quedan las de inicio */ }
+  }
+  // Lee la lista del servidor, aplica el cambio y la guarda (así no se pisa lo que otro agregó)
+  async function cambiarUnidades(fn) {
+    if (!unidadesEnServidor) throw new Error('Para editar las unidades falta correr supabase/15-unidades.sql en Supabase.');
+    const { data, error } = await N.sb.from('colado_listas').select('valores').eq('clave', 'unidades');
+    if (error) throw new Error(N.traducir(error));
+    const nuevas = fn((data && data[0] && data[0].valores) || UNIDADES);
+    const r = await N.sb.from('colado_listas').update({ valores: nuevas }).eq('clave', 'unidades').select('clave');
+    if (r.error) throw new Error(N.traducir(r.error));
+    if (!r.data.length) throw new Error('Tu rol no puede editar las unidades.');
+    UNIDADES = nuevas;
+  }
 
   // Estado de la requisición completa
   const REQ_EST = {
@@ -1408,7 +1427,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   // correccion: el admin técnico corrige una requisición ya enviada o revisada (v0.7);
   // lo que agrega entra aprobado y todo queda en la bitácora
   async function drReq(r0, obraPre, { correccion = false } = {}) {
-    await cargar();
+    await Promise.all([cargar(), cargarUnidades()]);
     const r = r0 ? req(r0.id) : null;
     const nueva = !r;
     if (correccion && !(r && esAdmin())) { toast('Solo el admin técnico corrige requisiciones enviadas.'); return; }
@@ -1453,7 +1472,13 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
         <fieldset class="fs"><legend><span class="mono">2</span>Materiales <span class="opt" data-cnt></span></legend><div class="fs-b">
           <div class="prow-h"><span>#</span><span>Insumo</span><span>Unidad</span><span>Cantidad</span><span>Observaciones</span><span>¿Dónde se empleará?</span><span></span></div>
           <div class="prows">${filas.map(fila).join('')}</div>
-          <button class="tbtn tbtn--sm" type="button" data-add>${I.plus}<span>Agregar renglón</span></button>
+          <div class="un-acc"><button class="tbtn tbtn--sm" type="button" data-add>${I.plus}<span>Agregar renglón</span></button>
+            <button class="tbtn tbtn--sm" type="button" data-un-ed aria-expanded="false">${I.listas || I.list}<span>Editar unidades</span></button></div>
+          <div class="un-ed" data-un-box hidden>
+            <p class="fld-h">Unidades para todas las requisiciones. Quitar una no cambia los materiales que ya la usan.</p>
+            <div class="un-chips" data-un-chips></div>
+            <div class="un-add"><input class="in" data-un-nueva maxlength="12" placeholder="Nueva unidad (ej. CAJA)" aria-label="Nueva unidad"><button class="btn btn--solid btn--sm" type="button" data-un-add>${I.plus}<span>Agregar</span></button></div>
+          </div>
         </div></fieldset>
       </div>
       <footer class="dr-f"><p class="dr-err" role="alert" data-err></p>
@@ -1482,6 +1507,30 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
       rows.addEventListener('click', e => { const b = e.target.closest('[data-del]'); if (b && $$('.prow', rows).length > 1) { b.closest('.prow').remove(); renum(); api.markDirty(); } });
       $('[data-add]', panel).addEventListener('click', () => { rows.insertAdjacentHTML('beforeend', fila(vacia(), 0)); renum(); $$('.prow', rows).pop().querySelector('input').focus(); });
       renum(); tipoH();
+      // Editor de unidades (en el mismo formulario)
+      const box = $('[data-un-box]', panel), chips = $('[data-un-chips]', panel), nueva_ = $('[data-un-nueva]', panel);
+      const pintarUn = () => {
+        chips.innerHTML = UNIDADES.map(u => `<span class="un-chip">${esc(u)}<button type="button" data-un-x="${esc(u)}" aria-label="Quitar ${esc(u)}">×</button></span>`).join('');
+        $$('select[name="unidad"]', rows).forEach(s0 => { const v = s0.value; s0.innerHTML = [...new Set([...UNIDADES, v].filter(Boolean))].map(u => `<option${u === v ? ' selected' : ''}>${esc(u)}</option>`).join(''); });
+      };
+      $('[data-un-ed]', panel).addEventListener('click', e => { box.hidden = !box.hidden; e.currentTarget.setAttribute('aria-expanded', String(!box.hidden)); if (!box.hidden) { pintarUn(); nueva_.focus(); } });
+      const agregarUn = async () => {
+        const v = nueva_.value.trim().toUpperCase().replace(/\s+/g, ' ');
+        if (!v) return;
+        if (UNIDADES.some(u => u.toUpperCase() === v)) { toast(`"${v}" ya está en la lista.`); return; }
+        try { await cambiarUnidades(xs => [...xs.filter(u => u.toUpperCase() !== v), v]); } catch (x) { toast(x.message); return; }
+        nueva_.value = ''; pintarUn(); toast(`Unidad "${v}" agregada.`);
+      };
+      $('[data-un-add]', panel).addEventListener('click', agregarUn);
+      nueva_.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); agregarUn(); } });
+      chips.addEventListener('click', async e => {
+        const b = e.target.closest('[data-un-x]'); if (!b) return;
+        const u = b.dataset.unX;
+        if (UNIDADES.length <= 1) { toast('Debe quedar al menos una unidad.'); return; }
+        if (!(await api.confirmar({ titulo: 'Quitar unidad', texto: `Se quita <b>${esc(u)}</b> de la lista para todas las requisiciones. Los materiales que ya la usan la conservan.`, ok: 'Quitar' }))) return;
+        try { await cambiarUnidades(xs => xs.filter(x => x !== u)); } catch (x) { toast(x.message); return; }
+        pintarUn(); toast(`Unidad "${u}" quitada.`);
+      });
       form.addEventListener('submit', async e => {
         e.preventDefault();
         const enviar = !!(e.submitter && e.submitter.hasAttribute('data-enviar'));

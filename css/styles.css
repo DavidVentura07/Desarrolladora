@@ -2181,3 +2181,13 @@ body.ft-cam-on { overflow: hidden; }
   body[data-rol="residente"] .tab-x--ft { order: 5; }
   body[data-rol="residente"] .tab-x--ftaltas { display: grid !important; }
 }
+/* Unidades editables en el formulario de la requisición (v0.13) */
+.un-acc { display: flex; flex-wrap: wrap; gap: 8px; }
+.un-ed { margin-top: 12px; padding: 14px 16px; border-radius: var(--r-md); background: var(--bg); }
+.un-ed[hidden] { display: none; }
+.un-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.un-chip { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px 0 12px; border-radius: 99px; background: var(--surface); font-size: 13px; font-weight: 700; }
+.un-chip button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--muted); font-size: 16px; line-height: 1; }
+.un-chip button:hover { background: var(--bad-bg); color: var(--bad); }
+.un-add { display: flex; gap: 8px; }
+.un-add .in { flex: 1; max-width: 260px; text-transform: uppercase; }
