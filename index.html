@@ -48,7 +48,14 @@
       <a href="#/obras" data-route="obras"><span data-ico="building"></span><span>Obras</span></a>
       <a href="#/requisiciones" data-route="requisiciones"><span data-ico="clip"></span><span>Requisiciones</span><b data-rcount="req"></b></a>
       <a href="#/colados" data-route="colados"><span data-ico="colado"></span><span>Colados</span><b data-ccount></b></a>
-      <a href="#/fuerza" data-route="fuerza" class="no-compras"><span data-ico="casco"></span><span>Fuerza de trabajo</span><b data-fcount></b></a>
+      <div class="side-grp no-compras" data-ftgrp>
+        <a href="#/ft-altas" data-ftgrp-t aria-haspopup="true"><span data-ico="casco"></span><span>Fuerza de trabajo</span><b data-fcount></b><i class="chev" data-ico="chevron"></i></a>
+        <div class="side-sub">
+          <a href="#/ft-altas" data-route="ft-altas">Altas y bajas</a>
+          <a href="#/ft-pase" data-route="ft-pase">Pase de lista<b data-fcount></b></a>
+          <a href="#/ft-registro" data-route="ft-registro">Registro</a>
+        </div>
+      </div>
       <a href="#/compras" data-route="compras" class="no-consulta"><span data-ico="receipt"></span><span>Compras y facturas</span><b data-rcount="pend"></b></a>
       <a href="#/fiscal" data-route="fiscal" class="solo-compras"><span data-ico="fiscal"></span><span>Datos fiscales</span></a>
       <a href="#/caja" data-route="caja" class="no-consulta"><span data-ico="cash"></span><span>Caja chica</span></a>
@@ -100,14 +107,16 @@
     <a href="#/obras" data-route="obras"><small>02</small>Obras</a>
     <a href="#/requisiciones" data-route="requisiciones"><small>03</small>Requisiciones</a>
     <a href="#/colados" data-route="colados"><small>04</small>Colados</a>
-    <a href="#/fuerza" data-route="fuerza" class="no-compras"><small>05</small>Fuerza de trabajo</a>
-    <a href="#/compras" data-route="compras" class="no-consulta"><small>06</small>Compras</a>
-    <a href="#/caja" data-route="caja" class="no-consulta"><small>07</small>Caja chica</a>
-    <a href="#/" data-route=""><small>08</small>Proveedores</a>
-    <a href="#/fiscal" data-route="fiscal" class="solo-compras"><small>09</small>Datos fiscales</a>
-    <a href="#/usuarios" data-route="usuarios" class="solo-jefes"><small>10</small>Usuarios</a>
-    <a href="#/bitacora" data-route="bitacora" class="solo-jefes"><small>11</small>Bitácora</a>
-    <a href="#/datos" data-route="datos" class="solo-jefes"><small>12</small>Respaldo</a>
+    <a href="#/ft-altas" data-route="ft-altas" class="no-compras"><small>05</small>Altas y bajas</a>
+    <a href="#/ft-pase" data-route="ft-pase" class="no-compras"><small>06</small>Pase de lista</a>
+    <a href="#/ft-registro" data-route="ft-registro" class="no-compras"><small>07</small>Registro de asistencia</a>
+    <a href="#/compras" data-route="compras" class="no-consulta"><small>08</small>Compras</a>
+    <a href="#/caja" data-route="caja" class="no-consulta"><small>09</small>Caja chica</a>
+    <a href="#/" data-route=""><small>10</small>Proveedores</a>
+    <a href="#/fiscal" data-route="fiscal" class="solo-compras"><small>11</small>Datos fiscales</a>
+    <a href="#/usuarios" data-route="usuarios" class="solo-jefes"><small>12</small>Usuarios</a>
+    <a href="#/bitacora" data-route="bitacora" class="solo-jefes"><small>13</small>Bitácora</a>
+    <a href="#/datos" data-route="datos" class="solo-jefes"><small>14</small>Respaldo</a>
   </nav>
   <div class="menu-foot"><div class="me me--menu" data-yo></div><span>Galitha · Plataforma interna</span><span class="solo-jefes" data-backup-text></span></div>
 </div>
@@ -120,7 +129,8 @@
   <a href="#/compras" data-route="compras" class="no-consulta"><span data-ico="receipt"></span>Compras</a>
   <!-- Cuarto botón según el rol (lo elige el CSS con body[data-rol]) -->
   <a href="#/colados" data-route="colados" class="tab-x tab-x--colados"><span data-ico="colado"></span>Colados</a>
-  <a href="#/fuerza" data-route="fuerza" class="tab-x tab-x--ft"><span data-ico="casco"></span>Pase de lista</a>
+  <a href="#/ft-altas" data-route="ft-altas" class="tab-x tab-x--ftaltas"><span data-ico="users"></span>Altas y bajas</a>
+  <a href="#/ft-pase" data-route="ft-pase" class="tab-x tab-x--ft"><span data-ico="casco"></span>Pase de lista</a>
   <a href="#/caja" data-route="caja" class="tab-x tab-x--caja"><span data-ico="cash"></span>Caja chica</a>
   <a href="#/" data-route="" class="tab-x tab-x--prov"><span data-ico="users"></span>Proveedores</a>
 </nav>

@@ -146,52 +146,80 @@
   const obrasVis = () => activas().filter(o => esCoord() || rol() === 'consulta' || esResDe(o.id));
   const obrasEdit = () => activas().filter(o => puedeEditar(o.id));
 
-  /* ---------- Estado de la página ---------- */
-  const UI = Object.assign({ tab: '', obra: '', desde: lunesDe(hoy()), hasta: addDays(lunesDe(hoy()), 5) },
+  /* ---------- Estado de las páginas (v0.13: tres páginas con submenú) ---------- */
+  const UI = Object.assign({ obra: '', desde: addDays(lunesDe(hoy()), -21), hasta: addDays(lunesDe(hoy()), 5) },
     (() => { try { return JSON.parse(sessionStorage.getItem('galitha.ft.ui')) || {}; } catch { return {}; } })());
   const saveUI = () => { try { sessionStorage.setItem('galitha.ft.ui', JSON.stringify(UI)); } catch { /* sin acceso */ } };
+  const TITULO = { 'ft-altas': 'Altas y bajas', 'ft-pase': 'Pase de lista', 'ft-registro': 'Registro de asistencia' };
 
-  function sinTabla() {
-    return { title: 'Fuerza de trabajo', html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div>
-      <h2 class="h2">Falta preparar el servidor</h2><p class="muted">Para usar la fuerza de trabajo hay que correr <span class="mono">supabase/12-fuerza-trabajo.sql</span> en Supabase.</p></div></section>`, bind() { } };
-  }
+  const vacia = (titulo, h2, texto) => ({ title: titulo, html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">${h2}</h2><p class="muted">${texto}</p></div></section>`, bind() { } });
+  function sinTabla() { return vacia('Fuerza de trabajo', 'Falta preparar el servidor', 'Para usar la fuerza de trabajo hay que correr <span class="mono">supabase/12-fuerza-trabajo.sql</span> en Supabase.'); }
 
-  async function pageFT() {
+  // Revisa acceso y deja elegida una obra válida; devuelve una página de aviso si no se puede seguir
+  async function preparar(ruta) {
     await cargar();
     if (!F.listo) return sinTabla();
+    if (rol() === 'compras') return vacia(TITULO[ruta], 'Sin acceso', 'La fuerza de trabajo la ven Dirección, el coordinador y el residente de cada obra.');
     const obras = obrasVis();
-    if (rol() === 'compras') return { title: 'Fuerza de trabajo', html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">Sin acceso</h2><p class="muted">La fuerza de trabajo la ven Dirección, el coordinador y el residente de cada obra.</p></div></section>`, bind() { } };
-    if (!obras.length) return { title: 'Fuerza de trabajo', html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">Sin obras asignadas</h2><p class="muted">Cuando seas residente (o suplente) de una obra, aquí pasarás lista a tus trabajadores.</p></div></section>`, bind() { } };
-    if (!obras.some(o => o.id === UI.obra)) UI.obra = (obras.find(o => esResDe(o.id)) || obras[0]).id;
-    if (!['pase', 'trab', 'reg'].includes(UI.tab)) UI.tab = esResDe(UI.obra) ? 'pase' : 'reg';
+    if (!obras.length) return vacia(TITULO[ruta], 'Sin obras asignadas', 'Cuando seas residente (o suplente) de una obra, aquí verás a tus trabajadores y pasarás lista.');
+    const todasOk = ruta === 'ft-registro' && obras.length > 1;
+    if (!(UI.obra === 'todas' && todasOk) && !obras.some(o => o.id === UI.obra)) UI.obra = (obras.find(o => esResDe(o.id)) || obras[0]).id;
     saveUI();
-    const o = obra(UI.obra);
-    const tabs = [['pase', 'Pase de lista'], ['trab', 'Trabajadores'], ['reg', 'Registro']];
-    const cuerpo = UI.tab === 'pase' ? paseHTML(o) : UI.tab === 'trab' ? trabHTML(o) : regHTML(o);
-    return {
-      title: 'Fuerza de trabajo',
-      html: `<section class="page ft">
-        <header class="page-head rv"><div><p class="eyebrow">Trabajadores y pase de lista por obra</p><h1 class="title">Fuerza de trabajo</h1></div>
-          <div class="col-hb">${esJefe() ? `<button class="tbtn" type="button" data-limite>${ic('clock')}<span>Hora límite ${esc(F.limite)}</span></button>` : ''}</div></header>
-        <div class="filterbar ft-bar rv" style="--d:60">
-          <div class="seg" role="group" aria-label="Sección">${tabs.map(([k, l]) => `<button type="button" data-tab="${k}" aria-pressed="${UI.tab === k}">${l}</button>`).join('')}</div>
-          ${obras.length > 1 ? `<span class="fb-sep"></span><label class="psel on"><span class="sr">Obra</span><select data-obra-f>${obras.map(x => `<option value="${esc(x.id)}"${x.id === UI.obra ? ' selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>` : `<span class="ft-obra">${ic('building')}${esc(o.nombre)}</span>`}
-        </div>
-        <div data-ft-cuerpo>${cuerpo}</div>
-      </section>`,
-      bind(sec) {
-        $$('[data-tab]', sec).forEach(b => b.addEventListener('click', () => { UI.tab = b.dataset.tab; saveUI(); api.rerender(); }));
-        const so = $('[data-obra-f]', sec); if (so) so.addEventListener('change', () => { UI.obra = so.value; saveUI(); api.rerender(); });
-        const bl = $('[data-limite]', sec); if (bl) bl.addEventListener('click', cambiarLimite);
-        if (UI.tab === 'pase') bindPase(sec, o);
-        else if (UI.tab === 'trab') bindTrab(sec, o);
-        else bindReg(sec, o);
+    return null;
+  }
+  // El isotipo de fondo de la tarjeta azul, como en Requisiciones
+  const deco = () => `<div class="deco">${api.markSVG()}</div>`;
+  const heroHTML = (eyebrow, titulo, sum, sqs) => `<section class="hero">
+      <div class="hero-main rv" style="--d:0">${deco()}<div><p class="h-eyebrow">${eyebrow}</p><h1>${titulo}</h1></div><p class="h-sum" data-h-sum>${sum}</p></div>
+      <div class="sqs-h" data-sqs>${sqs}</div></section>`;
+  const sqHTML = (cls, t, n, small, d = 80) => `<div class="sq sq--${cls} rv" style="--d:${d}"><p>${t}</p><div class="sq-row"><strong>${n}</strong><small>${small}</small></div></div>`;
+  const residenteDe = o => (o.residente && o.residente.nombre) || 'sin residente';
+  const fFecha = s => { const d = toDate(s); return d ? `${d.getDate()} de ${MES[d.getMonth()]}` : ''; };
+
+  // Selector de obra (solo con varias obras: Dirección, admin, coordinador o suplente de otra obra)
+  function barraObras(ruta) {
+    const obras = obrasVis();
+    if (obras.length < 2) return '';
+    const est = o => {
+      if (ruta === 'ft-pase') {
+        const p = paseDe(o.id, hoy());
+        if (p) return p.estado === 'no_labora' ? ['gris', 'No se labora'] : [p.aTiempo ? 'ok' : 'sun', `Enviado ${horaMX(p.en)}${p.aTiempo ? ' ✓' : ' · tarde'}`];
+        if (dow(hoy()) === 0) return ['gris', 'Domingo'];
+        if (!activosDe(o.id).length) return ['gris', 'Sin trabajadores'];
+        return minHM(horaMX()) > minHM(F.limite) ? ['bad', 'Sin pase · ya pasó la hora'] : ['sun', 'Pendiente'];
       }
+      if (ruta === 'ft-altas') { const n = activosDe(o.id).length, pe = pendientes(o.id).length; return pe ? ['sun', `${n} activos · ${pe} sin publicar`] : ['gris', `${n} ${n === 1 ? 'activo' : 'activos'}`]; }
+      const s = statsObra(o); return s.no ? ['bad', `${s.ok}/${s.env} a tiempo · ${s.no} sin pase`] : ['ok', `${s.ok}/${s.env} a tiempo`];
     };
+    const todas = ruta === 'ft-registro' ? `<button type="button" class="fz-ob${UI.obra === 'todas' ? ' on' : ''}" data-obra-sel="todas"><b>Todas las obras</b><small>Comparar las ${obras.length}</small></button>` : '';
+    return `<nav class="fz-obras rv" aria-label="Obra">${todas}${obras.map(o => { const [c, t] = est(o); return `<button type="button" class="fz-ob${UI.obra === o.id ? ' on' : ''}" data-obra-sel="${esc(o.id)}"><b>${esc(o.nombre)}</b><small><i class="e-${c}"></i>${esc(t)}</small></button>`; }).join('')}</nav>`;
+  }
+  function bindObras(sec) {
+    $$('[data-obra-sel]', sec).forEach(b => b.addEventListener('click', () => { UI.obra = b.dataset.obraSel; saveUI(); api.rerender(); }));
+  }
+  // La barra lateral: "Fuerza de trabajo" se despliega y queda abierta en sus tres páginas
+  function marcarGrupo() {
+    const r = (location.hash.match(/^#\/([^/]+)/) || [])[1] || '';
+    $$('[data-ftgrp]').forEach(g => { const den = r.startsWith('ft-'); g.classList.toggle('en', den); g.classList.toggle('open', den); });   // abierto solo en sus páginas (así cabe la barra)
+    if (r !== 'ft-altas') { const x = $('#ft-pub-top'); if (x) x.remove(); }
+  }
+  addEventListener('hashchange', marcarGrupo);
+  document.addEventListener('click', e => {
+    const t = e.target.closest('[data-ftgrp-t]'); if (!t) return;
+    e.preventDefault();
+    const g = t.closest('[data-ftgrp]');
+    if (g.classList.contains('en')) g.classList.toggle('open'); else location.hash = t.getAttribute('href');   // fuera de sus páginas, abre Altas y bajas
+  });
+  setTimeout(marcarGrupo, 0);
+  async function pageFuerza() {   // #/fuerza (ligas viejas): manda a la página que corresponde
+    await cargar().catch(() => { });
+    const r = obrasEdit().some(o => esResDe(o.id)) ? 'ft-pase' : esCoord() ? 'ft-registro' : 'ft-altas';
+    setTimeout(() => { location.replace(location.pathname + location.search + '#/' + r); }, 0);
+    return { title: 'Fuerza de trabajo', html: '<section class="page"></section>', bind() { } };
   }
 
   async function cambiarLimite() {
-    const v = await api.preguntar({ titulo: 'Hora límite del pase de lista', texto: 'Una sola para todas las obras. Si a esa hora no se ha pasado lista, se avisa al coordinador y a Dirección (parte 2).', etiqueta: 'Hora (24 h, por ejemplo 09:00)', valor: F.limite, ok: 'Guardar', requerido: true });
+    const v = await api.preguntar({ titulo: 'Hora límite del pase de lista', texto: 'Una sola para todas las obras. Si a esa hora no se ha pasado lista, se avisa al coordinador y a Dirección.', etiqueta: 'Hora (24 h, por ejemplo 09:00)', valor: F.limite, ok: 'Guardar', requerido: true });
     if (v == null) return;
     const m = /^(\d{1,2}):(\d{2})$/.exec(str(v));
     if (!m || +m[1] > 23 || +m[2] > 59) { toast('Escribe la hora como 09:00.'); return; }
@@ -203,9 +231,95 @@
   }
 
   /* =========================================================
+     ALTAS Y BAJAS
+     ========================================================= */
+  const DOT = { alta: ['c2', '+'], reingreso: ['c2', '+'], baja: ['c4', '−'], transferencia_sale: ['c0', '→'], transferencia_entra: ['c0', '←'], cambio: ['c1', '✎'] };
+  async function pageAltas() {
+    const x0 = await preparar('ft-altas'); if (x0) return x0;
+    const o = obra(UI.obra), ed = puedeEditar(o.id);
+    const ts = activosDe(o.id), bajas = F.trab.filter(t => t.obraId === o.id && !t.activo).sort((a, b) => String(b.baja).localeCompare(String(a.baja)));
+    const pend = pendientes(o.id), u = ultimoAviso(o.id, 'ft_cambios');
+    const cuads = [...new Set(ts.map(t => t.cuadrilla))], cons = new Set(ts.map(t => t.contratista)).size;
+    const mes = hoy().slice(0, 7), bajasMes = bajas.filter(t => String(t.baja).startsWith(mes)).length;
+    const tipos = k => pend.filter(m => k.includes(m.tipo)).length;
+    const resPend = [[tipos(['alta', 'reingreso']), 'alta', 'altas'], [tipos(['baja']), 'baja', 'bajas'], [tipos(['transferencia_sale', 'transferencia_entra']), 'transferencia', 'transferencias'], [tipos(['cambio']), 'cambio', 'cambios']]
+      .filter(x => x[0]).map(([n, s, p]) => `${n} ${n === 1 ? s : p}`).join(' · ');
+    const grupos = cuads.map((c, ci) => {
+      const ws = ts.filter(t => t.cuadrilla === c), con = [...new Set(ws.map(t => t.contratista))].join(' · ');
+      return `<div class="fz-gcard" data-cuad="${esc(c)}"><div class="fz-gh"><i class="fz-pt t-${ci % 7}"></i><div><b>${esc(c)}</b><small>${esc(con)}</small></div><span>${ws.length}</span></div>
+        ${ws.map(t => { const nuevo = pend.some(m => m.trabajadorId === t.id && ['alta', 'reingreso', 'transferencia_entra'].includes(m.tipo));
+          return `<button type="button" class="ft-w ft-w--btn" data-trab="${esc(t.id)}" data-txt="${esc([t.nombre, t.puesto, t.contratista, t.cuadrilla].join(' ').toLowerCase())}"><span class="ft-av">${esc(api.iniciales(t.nombre))}</span>
+            <span class="ft-n"><b>${esc(t.nombre)}${nuevo ? '<em class="ft-tag">nuevo</em>' : ''}</b><span>${esc(t.puesto)} · desde el ${esc(fMes(t.alta))}</span></span>${api.ARR}</button>`; }).join('')}</div>`;
+    }).join('');
+    const movs = F.movs.filter(m => m.obraId === o.id).slice(0, 8);
+    return {
+      title: 'Altas y bajas',
+      html: `<section class="page ft">
+        ${barraObras('ft-altas')}
+        ${heroHTML(`${esc(o.nombre)} · residente ${esc(residenteDe(o))}`, 'Altas y<br>bajas',
+          `<span class="h-count"><b>${ts.length}</b> ${ts.length === 1 ? 'trabajador activo' : 'trabajadores activos'} · <b>${cuads.length}</b> ${cuads.length === 1 ? 'cuadrilla' : 'cuadrillas'} · <b>${cons}</b> ${cons === 1 ? 'contratista' : 'contratistas'}</span><span class="pill">${bajasMes ? `${bajasMes} ${bajasMes === 1 ? 'baja' : 'bajas'} este mes` : 'Sin bajas este mes'}</span>`,
+          sqHTML('sun', 'Cambios sin<br>publicar', pend.length, pend.length ? `${esc(resPend)} · la oficina ya los ve; al publicar se le avisa` : 'Todo está publicado')
+          + sqHTML('lav', 'Último aviso<br>a la oficina', u ? `<span class="sq-fecha">${esc(fMes(FMX.format(new Date(u.en))))}<br>${esc(horaMX(u.en))}</span>` : '—', u ? esc(paraTxt(u)) : 'Todavía no se publica nada', 140))}
+        ${ed && pend.length ? `<button type="button" class="btn fz-pub fz-solo-cel" data-publicar>${ic('send')}<span>Publicar ${pend.length} ${pend.length === 1 ? 'cambio' : 'cambios'}</span></button>` : ''}
+        <div class="fz-ab rv" style="--d:120">
+          <div>
+            ${ts.length ? `<div class="fz-bar">
+              <label class="fz-buscar">${ic('search')}<input type="search" data-buscar placeholder="Buscar trabajador, puesto o contratista" aria-label="Buscar"></label>
+              ${cuads.length > 1 ? `<div class="seg fz-seg" role="group" aria-label="Cuadrilla"><button type="button" data-cf="" aria-pressed="true">Todas</button>${cuads.map(c => `<button type="button" data-cf="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div>` : ''}
+            </div>
+            <div class="fz-cols">${grupos}</div>`
+            : `<div class="empty empty--sm"><p class="h3">Sin trabajadores activos</p><p class="muted small">${ed ? 'Usa <b>Dar de alta</b> para agregar a la gente de la obra.' : 'El residente da de alta a los trabajadores de su obra.'}</p></div>`}
+          </div>
+          <aside class="fz-side">
+            <div class="fz-card"><h3>Movimientos recientes</h3>${movs.length ? `<ul class="fz-mov">${movs.map(m => { const t = trabDe(m.trabajadorId) || { nombre: 'Trabajador' }; const [c, s] = DOT[m.tipo] || ['c6', '·'];
+              return `<li><span class="dot ${c}">${s}</span><div><b>${esc(MOV[m.tipo] || m.tipo)} · ${esc(t.nombre)}</b><small>${esc(m.detalle && m.tipo !== 'alta' ? m.detalle + ' · ' : '')}${esc(fMes(m.fecha))}${m.publicado ? '' : ' · sin publicar'}</small></div></li>`; }).join('')}</ul>` : '<p class="fz-help">Sin movimientos todavía.</p>'}</div>
+            <div class="fz-card"><h3>Dados de baja <small>${bajas.length}</small></h3>${bajas.length ? bajas.map(t => `<button type="button" class="ft-w ft-w--btn is-off" data-trab="${esc(t.id)}"><span class="ft-av">${esc(api.iniciales(t.nombre))}</span>
+              <span class="ft-n"><b>${esc(t.nombre)}</b><span>${esc(t.puesto)} · ${esc(fMes(t.baja))}${t.motivoBaja ? ' · ' + esc(t.motivoBaja) : ''}</span></span>${api.ARR}</button>`).join('') : '<p class="fz-help">Nadie dado de baja.</p>'}</div>
+          </aside>
+        </div>
+      </section>`,
+      bind(sec) {
+        bindObras(sec); marcarGrupo();
+        $$('[data-trab]', sec).forEach(b => b.addEventListener('click', () => drTrabajador(trabDe(b.dataset.trab))));
+        // "Publicar cambios" va arriba a la derecha, junto a "Dar de alta" (en celular, debajo de los cuadros)
+        const r0 = $('#ft-pub-top'); if (r0) r0.remove();
+        if (ed && pend.length) {
+          const b = document.createElement('button');
+          b.type = 'button'; b.id = 'ft-pub-top'; b.className = 'btn fz-pub';
+          b.innerHTML = `${ic('send')}<span>Publicar cambios</span><b>${pend.length}</b>`;
+          const r = $('.deskbar-r'); if (r) r.insertBefore(b, r.firstChild);
+          b.addEventListener('click', () => publicar(o, b));
+        }
+        $$('[data-publicar]', sec).forEach(b => b.addEventListener('click', () => publicar(o, b)));
+        let cf = '';
+        const filtra = () => {
+          const q = norm(($('[data-buscar]', sec) || {}).value || '');
+          $$('.fz-gcard', sec).forEach(g => {
+            let n = 0;
+            $$('[data-trab]', g).forEach(t => { const v = (!q || norm(t.dataset.txt).includes(q)); t.hidden = !v; if (v) n++; });
+            g.hidden = (cf && g.dataset.cuad !== cf) || !n;
+          });
+        };
+        const bq = $('[data-buscar]', sec); if (bq) bq.addEventListener('input', filtra);
+        $$('[data-cf]', sec).forEach(b => b.addEventListener('click', () => { cf = b.dataset.cf; $$('[data-cf]', sec).forEach(x => x.setAttribute('aria-pressed', x === b)); filtra(); }));
+      }
+    };
+  }
+  const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  async function publicar(o, bp) {
+    bp.disabled = true;
+    let r;
+    try { r = ok(await sb().rpc('publicar_movimientos', { p_obra: o.id })); } catch (e) { bp.disabled = false; toast(e.message); return; }
+    if (!r || !r.total) { toast('No había cambios por publicar.'); api.rerender(); return; }
+    toast(`${r.total} ${r.total === 1 ? 'cambio publicado' : 'cambios publicados'}. Avisando a Dirección y al coordinador…`);
+    await avisarCambios(o.id);
+    api.rerender();
+  }
+
+  /* =========================================================
      PASE DE LISTA
      ========================================================= */
-  let PL = null;   // { obraId, fecha, marcas: {id: {m, hora, nota}}, fotos: [], paso }
+  let PL = null;   // { obraId, fecha, marcas: {id: {m, hora, nota}}, fotos: [] }
   const KEYB = (o, f) => `galitha.ft.pl.${o}.${f}`;
   const leerBorrador = (o, f) => { try { return JSON.parse(localStorage.getItem(KEYB(o, f))) || {}; } catch { return {}; } };
   const guardarBorrador = () => { try { localStorage.setItem(KEYB(PL.obraId, PL.fecha), JSON.stringify(PL.marcas)); } catch { /* sin acceso */ } };
@@ -214,7 +328,7 @@
     const f = hoy();
     if (!PL || PL.obraId !== obraId || PL.fecha !== f) {
       if (PL) PL.fotos.forEach(x => URL.revokeObjectURL(x.url));
-      PL = { obraId, fecha: f, marcas: leerBorrador(obraId, f), fotos: [], paso: 1 };
+      PL = { obraId, fecha: f, marcas: leerBorrador(obraId, f), fotos: [] };
     }
     const ids = new Set(activosDe(obraId).map(t => t.id));
     Object.keys(PL.marcas).forEach(k => { if (!ids.has(k)) delete PL.marcas[k]; });
@@ -222,78 +336,116 @@
   }
   const VIGENCIA = 18 * 60e3;   // la base acepta fotos tomadas hace 20 min o menos
   const vencida = x => !x.ruta && Date.now() - new Date(x.tomadaEn).getTime() > VIGENCIA;
-
-  function limiteHTML(fecha) {
-    const ahora = minHM(horaMX()), lim = minHM(F.limite);
-    if (fecha !== hoy()) return '';
-    return ahora <= lim ? `<span class="pill pill--sun">${ic('clock')}Límite ${esc(F.limite)} · faltan ${lim - ahora} min</span>`
-      : `<span class="pill pill--bad">${ic('clock')}Ya pasó la hora límite (${esc(F.limite)}): se registrará fuera de hora</span>`;
-  }
-
-  function paseHTML(o) {
-    const f = hoy(), p = paseDe(o.id, f);
-    const hero = (titulo, extra) => `<div class="ft-hero rv" style="--d:80"><small>${esc(o.nombre)} · ${esc(fDia(f))}</small><b>${titulo}</b><div class="ft-pills">${extra || ''}</div></div>`;
-    if (p) return hero(p.estado === 'no_labora' ? 'Hoy no se labora' : 'Pase de lista enviado', `<span class="pill pill--w">${ic('candado')}Cerrado</span>`) + resumenPase(p, o);
-    if (dow(f) === 0) return hero('Hoy es domingo') + '<div class="empty empty--sm"><p class="h3">Los domingos no se pasa lista</p></div>';
-    if (!puedeEditar(o.id)) return hero('Todavía no se pasa lista', minHM(horaMX()) > minHM(F.limite) ? `<span class="pill pill--bad">${ic('clock')}Ya pasó la hora límite (${esc(F.limite)})</span>` : limiteHTML(f)) + `<div class="empty empty--sm"><p class="muted small">El residente de la obra pasa lista cada mañana.</p></div>`;
-    const ts = activosDe(o.id);
-    if (!ts.length) return hero('Pase de lista de hoy', limiteHTML(f)) + `<div class="empty empty--sm"><p class="h3">Todavía no hay trabajadores</p><p class="muted small">Primero da de alta a tus trabajadores.</p><button class="btn btn--solid" type="button" data-alta>${ic('plus')}<span>Dar de alta</span></button>
-      <p class="muted small" style="margin-top:14px"><button type="button" class="link-u" data-nolabora>Hoy no se labora</button></p></div>`;
-    const pl = plDe(o.id);
-    return hero('Pase de lista de hoy', `${limiteHTML(f)}<span class="pill pill--w">Paso ${pl.paso} de 2</span>`)
-      + (esCoord() && !esResDe(o.id) ? `<div class="note note--info">${ic('alert')}<p>Normalmente pasa lista el residente. Si lo haces tú, las fotos saldrán con su ubicación real.</p></div>` : '')
-      + `<div data-ft-pase></div>`;
-  }
-
-  function pintarPase(box, o) {
-    const pl = plDe(o.id), ts = activosDe(o.id);
-    const n = k => ts.filter(t => (pl.marcas[t.id] || {}).m && (k === 'A' ? cuentaAsist(pl.marcas[t.id].m) : pl.marcas[t.id].m === k)).length;
-    const sin = ts.filter(t => !(pl.marcas[t.id] || {}).m).length;
-    if (pl.paso === 1) {
-      let g0 = '';
-      box.innerHTML = `
-        <div class="ft-count"><div><b>${n('A')}</b><span>Asistencia</span></div><div><b>${n('F')}</b><span>Falta</span></div><div><b>${sin}</b><span>Sin marcar</span></div></div>
-        <p class="ft-todos">${sin ? `<button type="button" class="link-u" data-todos>Marcar asistencia a los ${sin} que faltan</button>` : '<span></span>'}<button type="button" class="link-u ft-nl" data-nolabora>Hoy no se labora</button></p>
-        <div class="ft-lista">${ts.map(t => {
-          const g = grupo(t), x = pl.marcas[t.id] || {}, otra = x.m && OTRAS.includes(x.m);
-          const h = g !== g0 ? `<div class="ft-grp"><span>${esc(g)}</span><span>${ts.filter(y => grupo(y) === g).length}</span></div>` : ''; g0 = g;
-          return `${h}<div class="ft-w" data-tid="${esc(t.id)}"><span class="ft-av">${esc(api.iniciales(t.nombre))}</span>
-            <div class="ft-n"><b>${esc(t.nombre)}</b><span>${esc(t.puesto)}${otra ? ` <em class="ft-tag">${esc(MARCAS[x.m].l)}${x.m === 'R' && x.hora ? ' ' + esc(x.hora) : ''}</em>` : ''}${x.nota ? ` · ${esc(x.nota)}` : ''}</span></div>
-            <div class="ft-mk"><button type="button" data-m="A" class="a${x.m === 'A' ? ' on' : ''}" aria-label="Asistencia" aria-pressed="${x.m === 'A'}">✓</button><button type="button" data-m="F" class="f${x.m === 'F' ? ' on' : ''}" aria-label="Falta" aria-pressed="${x.m === 'F'}">✗</button><button type="button" data-m="O" class="o${otra ? ' on' : ''}" aria-label="Otras opciones">${otra ? esc(x.m) : '···'}</button></div></div>`;
-        }).join('')}</div>
-        <div class="ft-foot"><button type="button" class="btn btn--solid ft-sig" data-sig${sin ? ' disabled' : ''}><span>${sin ? `Faltan ${sin} por marcar` : 'Siguiente: fotos por cuadrilla'}</span>${sin ? '' : api.ARR}</button></div>`;
-      return;
-    }
-    // Paso 2: fotos
-    const cuads = [...new Set(ts.filter(t => (pl.marcas[t.id] || {}).m !== 'F').map(t => t.cuadrilla))];
-    const faltanC = cuads.filter(c => !pl.fotos.some(x => x.cuadrilla === c));
-    const venc = pl.fotos.filter(vencida).length;
-    box.innerHTML = `
-      <div class="ft-count"><div><b>${n('A')}</b><span>Asistencia</span></div><div><b>${n('F')}</b><span>Falta</span></div><div><b>${pl.fotos.length}</b><span>Fotos</span></div></div>
-      <p class="ft-todos"><button type="button" class="link-u" data-atras>← Regresar a la lista</button></p>
-      <div class="ft-fotobox">
-        <p class="ft-fh">Toma una foto de cada cuadrilla con la cámara de la app. ${faltanC.length ? `Faltan: <b>${faltanC.map(esc).join(', ')}</b>.` : cuads.length ? '<b>Ya están todas las cuadrillas.</b>' : ''}</p>
-        <button type="button" class="btn btn--solid ft-cam-btn" data-camara>${ic('camara')}<span>${pl.fotos.length ? 'Tomar otra foto' : 'Abrir cámara'}</span></button>
-      </div>
-      <div class="ft-fotos">${pl.fotos.map((x, i) => `<div class="ft-ph${x.dist != null && x.dist > (obra(pl.obraId).radioM || 150) ? ' is-bad' : ''}${vencida(x) ? ' is-old' : ''}">
-        <img src="${x.url}" alt=""><div class="ft-pi"><b>${esc(x.cuadrilla)}</b><span>${esc(horaMX(x.tomadaEn))} · ${distTxt(x.dist, obra(pl.obraId))} · ±${esc(x.prec)} m</span>${vencida(x) ? '<span class="ft-bad">Tiene más de 18 min: vuelve a tomarla</span>' : ''}</div>
-        <button type="button" class="ibtn" data-quitar="${i}" aria-label="Quitar foto">${ic('trash')}</button></div>`).join('')}</div>
-      ${venc ? `<div class="note note--bad">${ic('alert')}<p>${venc === 1 ? 'Una foto ya tiene' : venc + ' fotos ya tienen'} más de 18 minutos. Quítala${venc === 1 ? '' : 's'} y vuelve a tomarla${venc === 1 ? '' : 's'}: el servidor solo acepta fotos recientes.</p></div>` : ''}
-      <div class="ft-foot"><button type="button" class="btn btn--solid ft-sig" data-enviar${!pl.fotos.length || venc ? ' disabled' : ''}>${ic('send')}<span>${pl.fotos.length ? 'Enviar pase de lista' : 'Falta al menos una foto'}</span></button>
-        </div>`;
-  }
   const distTxt = (d, o) => (d == null ? (o && o.lat != null ? 'sin distancia' : 'obra sin ubicación') : d > ((o && o.radioM) || 150) ? `<span class="ft-bad">fuera de la obra (${Math.round(d)} m)</span>` : `dentro de la obra (${Math.round(d)} m)`);
+  const pillLimite = () => { const a = minHM(horaMX()), l = minHM(F.limite);
+    return a <= l ? `<span class="pill fz-pill-sun">${ic('clock')} Límite ${esc(F.limite)} · faltan ${l - a} min</span>` : `<span class="pill fz-pill-bad">${ic('clock')} Ya pasó la hora límite (${esc(F.limite)})</span>`; };
+  // Una tarjeta de trabajador del pase (botones ✓ ✗ ···); de solo lectura si ya se envió
+  const filaPase = (t, x, lect) => {
+    const otra = x.m && OTRAS.includes(x.m);
+    return `<div class="ft-w${lect ? ' fz-lect' : ''}" data-tid="${esc(t.id)}"><span class="ft-av">${esc(api.iniciales(t.nombre))}</span>
+      <div class="ft-n"><b>${esc(t.nombre)}</b><span>${esc(t.puesto)}${otra ? ` <em class="ft-tag">${esc(MARCAS[x.m].l)}${x.m === 'R' && x.hora ? ' ' + esc(x.hora) : ''}</em>` : ''}${x.nota ? ` · ${esc(x.nota)}` : ''}</span></div>
+      <div class="ft-mk"><button type="button" data-m="A" class="a${x.m === 'A' ? ' on' : ''}" aria-label="Asistencia" aria-pressed="${x.m === 'A'}"${lect ? ' tabindex="-1"' : ''}>✓</button><button type="button" data-m="F" class="f${x.m === 'F' ? ' on' : ''}" aria-label="Falta" aria-pressed="${x.m === 'F'}"${lect ? ' tabindex="-1"' : ''}>✗</button><button type="button" data-m="O" class="o${otra ? ' on' : ''}" aria-label="Otras opciones"${lect ? ' tabindex="-1"' : ''}>${otra ? esc(x.m) : '···'}</button></div></div>`;
+  };
+  const gruposPase = (ts, marca, lect) => {
+    const cs = [...new Set(ts.map(t => t.cuadrilla))];
+    return cs.map((c, ci) => { const ws = ts.filter(t => t.cuadrilla === c), con = [...new Set(ws.map(t => t.contratista))].join(' · ');
+      return `<div class="fz-g"><div class="ft-grp"><span><i class="fz-pt t-${ci % 7}"></i>${esc(c)} · ${esc(con)}</span><span>${ws.filter(t => (marca(t) || {}).m).length} de ${ws.length}</span></div>${ws.map(t => filaPase(t, marca(t) || {}, lect)).join('')}</div>`; }).join('');
+  };
 
-  function bindPase(sec, o) {
-    const box = $('[data-ft-pase]', sec);
-    $$('[data-alta]', sec).forEach(b => b.addEventListener('click', () => drTrabajador(null)));
-    $$('[data-nolabora]', sec).forEach(b => b.addEventListener('click', () => noLabora(o)));
-    if (!box) { bindResumen(sec, o); return; }
-    const pinta = () => pintarPase(box, o);
+  async function pagePase() {
+    const x0 = await preparar('ft-pase'); if (x0) return x0;
+    const o = obra(UI.obra), f = hoy(), p = paseDe(o.id, f), ts = activosDe(o.id), total = ts.length;
+    const eyebrow = `${esc(o.nombre)} · residente ${esc(residenteDe(o))} · ${esc(fDia(f))}`;
+    const jefeLim = esJefe() ? `<button type="button" class="tbtn tbtn--sm" data-limite>${ic('clock')}<span>Hora límite ${esc(F.limite)}</span></button>` : '';
+    const pagina = (html, bind) => ({ title: 'Pase de lista', html: `<section class="page ft">${barraObras('ft-pase')}${html}</section>`, bind(sec) { bindObras(sec); marcarGrupo(); const bl = $('[data-limite]', sec); if (bl) bl.addEventListener('click', cambiarLimite); if (bind) bind(sec); } });
+
+    // Hoy no se labora
+    if (p && p.estado === 'no_labora') return pagina(heroHTML(eyebrow, 'Hoy no se<br>labora', `<span class="h-count">Registrado por <b>${esc(p.por)}</b> a las ${esc(horaMX(p.en))}</span><span class="pill">Cuenta como el pase de lista de hoy</span>`,
+      sqHTML('lav', 'Motivo', `<span class="sq-txt">${esc(p.motivo.split(':')[0])}</span>`, esc(p.motivo.split(':').slice(1).join(':').trim() || 'Sin detalle'))
+      + sqHTML('sun', 'Trabajadores<br>en la obra', total, 'no se les marca falta este día', 140))
+      + `<div class="note note--info rv">${ic('cal')}<p>Este día aparece en gris en el Registro y no genera aviso de "pase no enviado".${esJefe() ? ' Si fue un error, bórralo desde el Registro (detalle del día) para que se pueda pasar lista.' : ''}</p></div>`);
+
+    // Ya enviado: solo lectura
+    if (p) {
+      const ms = marcasDe(p), fs = fotosDe(p), asist = ms.filter(a => cuentaAsist(a.marca)).length, faltas = ms.filter(a => a.marca === 'F').length;
+      const otras = ms.filter(a => OTRAS.includes(a.marca)).length, fuera = fs.filter(x => x.fuera).length;
+      const tsP = ms.map(a => trabDe(a.trabajadorId)).filter(Boolean).sort(porGrupo);
+      const marca = t => { const a = ms.find(y => y.trabajadorId === t.id); return a ? { m: a.marca, hora: a.hora, nota: a.nota } : {}; };
+      return pagina(heroHTML(eyebrow, 'Pase de<br>lista', `<span class="h-count"><b>${ms.length}</b> de <b>${ms.length}</b> marcados · <b>${fs.length}</b> ${fs.length === 1 ? 'foto' : 'fotos'}</span><span class="pill ${p.aTiempo ? '' : 'fz-pill-sun'}">${ic('clock')} Enviado ${esc(horaMX(p.en))} · ${p.aTiempo ? 'a tiempo' : 'fuera de hora'}</span>`,
+        sqHTML('ok', 'Asistencia<br>de hoy', `${asist}<span class="sq-de">/${ms.length}</span>`, `${faltas} ${faltas === 1 ? 'falta' : 'faltas'}${otras ? ` · ${otras} con otra marca` : ''}`)
+        + sqHTML('lav', 'Pase de lista<br>enviado', `<span class="sq-txt">${esc(horaMX(p.en))}</span>`, 'Hora del servidor · ya no se modifica', 140))
+        + `<div class="fz-pl rv" style="--d:120"><div>
+            <div class="fz-sec" style="margin-top:0"><span class="num">1</span><h2>Asistencia enviada</h2><div class="r">
+              ${esCoord() ? `<button type="button" class="tbtn tbtn--sm" data-dia="${esc(p.id)}">${ic('edit')}<span>Ver detalle y corregir</span></button>` : puedeEditar(o.id) ? `<button type="button" class="tbtn tbtn--sm" data-pedir="${esc(p.id)}">${ic('undo')}<span>Pedir corrección</span></button>` : ''}${jefeLim}</div></div>
+            ${p.correccion ? `<div class="note">${ic('undo')}<p><b>Corrección pedida</b> por ${esc(p.correccionPor)}: ${esc(p.correccion)}</p></div>` : ''}
+            ${p.corregidoEn ? `<p class="fz-help">Corregido por ${esc(p.corregidoPor)} el ${esc(fMes(FMX.format(new Date(p.corregidoEn))))} a las ${esc(horaMX(p.corregidoEn))}.</p>` : ''}
+            <div class="fz-cols">${gruposPase(tsP, marca, true)}</div></div>
+          <aside class="fz-side">
+            <div class="fz-card"><div class="fz-sec" style="margin:0 0 12px"><span class="num">2</span><h2>Fotos por cuadrilla</h2></div>
+              ${rol() === 'consulta' ? '<p class="fz-help">Las fotos las ven el residente, el coordinador y Dirección.</p>' : `<div class="fz-frs">${fs.map(x => `<button type="button" class="fz-fr" data-ver="${esc(x.ruta)}"><img class="fz-th" data-ruta="${esc(x.ruta)}" alt=""><div><b>${esc(x.cuadrilla)}</b><small>${esc(horaMX(x.tomadaEn))} · ${distTxt(x.dist, o)}</small></div></button>`).join('')}</div>`}
+              ${fuera ? `<p class="fz-help" style="margin:10px 0 0"><span class="ft-bad">${fuera} ${fuera === 1 ? 'foto quedó' : 'fotos quedaron'} fuera de la obra.</span></p>` : ''}</div>
+            <div class="fz-card fz-envio fz-envio--ok"><b>✓ Enviado a las ${esc(horaMX(p.en))}</b><small>${p.aTiempo ? 'A tiempo' : 'Fuera de hora'} · pasó lista ${esc(p.por)}. ${esCoord() ? 'Si algo está mal, corrígelo en el detalle.' : 'Si algo está mal, pide la corrección.'}</small></div>
+          </aside></div>`,
+        sec => bindResumen(sec, o));
+    }
+
+    if (dow(f) === 0) return pagina(heroHTML(eyebrow, 'Hoy es<br>domingo', '<span class="h-count">Los domingos no se pasa lista</span>', sqHTML('ok', 'Trabajadores<br>activos', total, 'en la obra') + sqHTML('lav', 'Hora límite', `<span class="sq-txt">${esc(F.limite)}</span>`, 'de lunes a sábado', 140)));
+
+    // Quien no puede pasar lista (cuenta de consulta)
+    if (!puedeEditar(o.id)) return pagina(heroHTML(eyebrow, 'Pase de<br>lista', `<span class="h-count">Todavía no se pasa lista hoy</span>${pillLimite()}`,
+      sqHTML('ok', 'Trabajadores<br>activos', total, 'en la obra') + sqHTML('sun', 'Hora límite', `<span class="sq-txt">${esc(F.limite)}</span>`, 'el residente pasa lista cada mañana', 140)));
+
+    if (!total) return pagina(heroHTML(eyebrow, 'Pase de<br>lista', `<span class="h-count">Todavía no hay trabajadores</span>${pillLimite()}`,
+      sqHTML('ok', 'Trabajadores<br>activos', 0, 'da de alta a la gente en Altas y bajas') + sqHTML('sun', 'Hora límite', `<span class="sq-txt">${esc(F.limite)}</span>`, 'de lunes a sábado', 140))
+      + `<div class="empty empty--sm"><a class="btn btn--solid" href="#/ft-altas">${ic('plus')}<span>Ir a Altas y bajas</span></a><p class="muted small" style="margin-top:14px"><button type="button" class="link-u" data-nolabora>Hoy no se labora</button></p></div>`,
+      sec => { $$('[data-nolabora]', sec).forEach(b => b.addEventListener('click', () => noLabora(o))); });
+
+    // En curso
+    plDe(o.id);
+    return pagina(heroHTML(eyebrow, 'Pase de<br>lista', '', '')
+      + (esCoord() && !esResDe(o.id) ? `<div class="note note--info rv">${ic('alert')}<p>Normalmente pasa lista el residente. Si lo haces tú, las fotos saldrán con tu ubicación real.</p></div>` : '')
+      + `<div class="fz-pl rv" style="--d:120"><div>
+          <div class="fz-sec" style="margin-top:0"><span class="num">1</span><h2>Marca la asistencia</h2><div class="r" data-pl-acc></div></div>
+          <div class="fz-cols" data-pl-lista></div></div>
+        <aside class="fz-side" data-pl-side></aside></div>`,
+      sec => bindPase(sec, o, jefeLim));
+  }
+
+  function pintarPase(sec, o, jefeLim) {
+    const pl = plDe(o.id), ts = activosDe(o.id), total = ts.length;
+    const m = t => pl.marcas[t.id] || {};
+    const sin = ts.filter(t => !m(t).m).length, asist = ts.filter(t => m(t).m && cuentaAsist(m(t).m)).length, faltas = ts.filter(t => m(t).m === 'F').length;
+    const ret = ts.filter(t => m(t).m === 'R').length;
+    const cuads = [...new Set(ts.filter(t => m(t).m !== 'F').map(t => t.cuadrilla))];
+    const faltanC = cuads.filter(c => !pl.fotos.some(x => x.cuadrilla === c)), venc = pl.fotos.filter(vencida).length;
+    $('[data-h-sum]', sec).innerHTML = `<span class="h-count"><b>${total - sin}</b> de <b>${total}</b> marcados · <b>${cuads.length - faltanC.length}</b> de <b>${cuads.length}</b> fotos</span>${pillLimite()}`;
+    $('[data-sqs]', sec).innerHTML = sqHTML('ok', 'Asistencia<br>de hoy', `${asist}<span class="sq-de">/${total}</span>`, `${faltas} ${faltas === 1 ? 'falta' : 'faltas'}${ret ? ` · ${ret} ${ret === 1 ? 'retardo' : 'retardos'}` : ''}`, 0)
+      + sqHTML('sun', 'Falta por<br>completar', sin || faltanC.length || '✓', sin ? `${sin === 1 ? 'trabajador' : 'trabajadores'} sin marcar${faltanC.length ? ` y ${faltanC.length} ${faltanC.length === 1 ? 'foto' : 'fotos'}` : ''}` : faltanC.length ? `${faltanC.length === 1 ? 'foto de cuadrilla' : 'fotos de cuadrilla'} por tomar` : 'Listo para enviar', 0);
+    $$('.sq', sec).forEach(e => e.classList.add('is-in'));
+    $('[data-pl-acc]', sec).innerHTML = `${sin ? `<button type="button" class="tbtn tbtn--sm" data-todos>Marcar asistencia a los ${sin} que faltan</button>` : ''}<button type="button" class="tbtn tbtn--sm" data-nolabora>Hoy no se labora</button>${jefeLim}`;
+    $('[data-pl-lista]', sec).innerHTML = gruposPase(ts, m, false);
+    const radio = o.radioM || 150;
+    $('[data-pl-side]', sec).innerHTML = `<div class="fz-card">
+        <div class="fz-sec" style="margin:0 0 12px"><span class="num">2</span><h2>Fotos por cuadrilla</h2></div>
+        <p class="fz-help">Con la cámara de la app. Cada foto queda con fecha, hora y ubicación.</p>
+        <div class="fz-frs">${pl.fotos.map((x, i) => `<div class="fz-fr${x.dist != null && x.dist > radio ? ' is-bad' : ''}${vencida(x) ? ' is-old' : ''}"><img class="fz-th" src="${x.url}" alt=""><div><b>${esc(x.cuadrilla)}</b><small>${esc(horaMX(x.tomadaEn))} · ${distTxt(x.dist, o)}</small>${vencida(x) ? '<small class="ft-bad">Tiene más de 18 min: vuelve a tomarla</small>' : ''}</div><button type="button" class="ibtn" data-quitar="${i}" aria-label="Quitar foto">${ic('trash')}</button></div>`).join('')}
+          ${faltanC.map(c => `<button type="button" class="fz-fr fz-fr--falta" data-camara="${esc(c)}"><span class="fz-th">${ic('camara')}</span><div><b>${esc(c)}</b><small>Tomar foto</small></div></button>`).join('')}
+          ${!faltanC.length ? `<button type="button" class="tbtn tbtn--sm" data-camara="">${ic('camara')}<span>Tomar otra foto</span></button>` : ''}</div>
+      </div>
+      <div class="fz-card fz-envio">
+        <div class="fz-prog"><span>Marcados</span><b>${total - sin}/${total}</b><i><em style="width:${total ? (total - sin) / total * 100 : 0}%"></em></i></div>
+        <div class="fz-prog"><span>Fotos</span><b>${cuads.length - faltanC.length}/${cuads.length}</b><i><em style="width:${cuads.length ? (cuads.length - faltanC.length) / cuads.length * 100 : 0}%"></em></i></div>
+        <button type="button" class="btn btn--solid" data-enviar${sin || !pl.fotos.length || venc ? ' disabled' : ''}>${ic('send')}<span>${sin ? `Faltan ${sin} por marcar` : !pl.fotos.length ? 'Falta al menos una foto' : venc ? 'Repite las fotos vencidas' : 'Enviar pase de lista'}</span></button>
+        <small>${!sin && pl.fotos.length && faltanC.length ? `Sin foto: ${esc(faltanC.join(', '))}. ` : ''}Ya enviado no se puede cambiar; cuenta la hora del servidor.</small>
+      </div>`;
+  }
+
+  function bindPase(sec, o, jefeLim) {
+    const pinta = () => pintarPase(sec, o, jefeLim);
     pinta();
-    box.addEventListener('click', async e => {
+    sec.addEventListener('click', async e => {
       const pl = PL;
-      const b = e.target.closest('button'); if (!b) return;
+      const b = e.target.closest('button'); if (!b || !pl) return;
       if (b.dataset.nolabora != null) { noLabora(o); return; }
       if (b.dataset.todos != null) { activosDe(o.id).forEach(t => { if (!(pl.marcas[t.id] || {}).m) pl.marcas[t.id] = { m: 'A' }; }); guardarBorrador(); pinta(); return; }
       if (b.dataset.m) {
@@ -303,10 +455,8 @@
         pl.marcas[t.id] = x.m === b.dataset.m ? {} : { m: b.dataset.m };
         guardarBorrador(); pinta(); return;
       }
-      if (b.dataset.sig != null) { pl.paso = 2; pinta(); sec.querySelector('.ft-pills .pill--w:last-child').textContent = 'Paso 2 de 2'; scrollTo({ top: 0, behavior: 'smooth' }); return; }
-      if (b.dataset.atras != null) { pl.paso = 1; pinta(); return; }
       if (b.dataset.quitar != null) { const [x] = pl.fotos.splice(+b.dataset.quitar, 1); if (x) URL.revokeObjectURL(x.url); pinta(); return; }
-      if (b.dataset.camara != null) { abrirCamara(o, pinta); return; }
+      if (b.dataset.camara != null) { abrirCamara(o, pinta, b.dataset.camara); return; }
       if (b.dataset.enviar != null) enviarPase(o, b, pinta);
     });
   }
@@ -389,25 +539,7 @@
     api.rerender();
   }
 
-  /* ---------- Resumen de un pase ya enviado ---------- */
-  function resumenPase(p, o) {
-    if (p.estado === 'no_labora') return `<div class="ft-lock">${ic('check')}<div><b>Registrado a las ${esc(horaMX(p.en))}</b>${esc(p.motivo)} · ${esc(p.por)}</div></div>`;
-    const ms = marcasDe(p), fs = fotosDe(p);
-    const n = k => ms.filter(a => a.marca === k).length;
-    const otras = ms.filter(a => OTRAS.includes(a.marca));
-    const fuera = fs.filter(x => x.fuera).length;
-    return `<div class="ft-lock${p.aTiempo ? '' : ' is-late'}">${ic(p.aTiempo ? 'check' : 'clock')}<div><b>${p.aTiempo ? 'A tiempo' : 'Fuera de hora'} · ${esc(horaMX(p.en))}</b>Hora del servidor (límite ${esc(p.limite)}). Pasó lista: ${esc(p.por)}.</div></div>
-      ${p.correccion ? `<div class="note">${ic('undo')}<p><b>Corrección pedida</b> por ${esc(p.correccionPor)}: ${esc(p.correccion)}</p></div>` : ''}
-      ${p.corregidoEn ? `<p class="muted small ft-corr">Corregido por ${esc(p.corregidoPor)} el ${esc(fMes(FMX.format(new Date(p.corregidoEn))))} a las ${esc(horaMX(p.corregidoEn))}.</p>` : ''}
-      <dl class="ft-kv"><dt>Asistencia</dt><dd>${ms.filter(a => cuentaAsist(a.marca)).length}</dd><dt>Faltas</dt><dd>${n('F')}</dd>
-        ${otras.length ? `<dt>Otras</dt><dd>${otras.map(a => `${esc(MARCAS[a.marca].l)}: ${esc((trabDe(a.trabajadorId) || {}).nombre || '')}${a.hora ? ' (' + esc(a.hora) + ')' : ''}`).join('<br>')}</dd>` : ''}
-        <dt>Fotos</dt><dd>${fs.length}${fuera ? ` · <span class="ft-bad">${fuera} fuera de la obra</span>` : ''}</dd></dl>
-      ${rol() === 'consulta' ? '' : fotosHTML(fs, o)}
-      <div class="ft-acc">
-        ${esCoord() ? `<button type="button" class="btn" data-dia="${esc(p.id)}">${ic('edit')}<span>Ver detalle y corregir</span></button>`
-          : puedeEditar(o.id) ? `<button type="button" class="btn" data-pedir="${esc(p.id)}">${ic('undo')}<span>Pedir corrección</span></button>` : ''}
-      </div>`;
-  }
+  /* ---------- Fotos de un pase ya enviado (detalle del día y pase enviado) ---------- */
   const fotosHTML = (fs, o) => `<div class="ft-fotos">${fs.map(x => `<button type="button" class="ft-ph${x.fuera ? ' is-bad' : ''}" data-ver="${esc(x.ruta)}">
       <img data-ruta="${esc(x.ruta)}" alt="Foto de ${esc(x.cuadrilla)}"><span class="ft-pi"><b>${esc(x.cuadrilla)}</b><span>Tomada ${esc(horaMX(x.tomadaEn))} · subida ${esc(horaMX(x.subidaEn))}</span><span>${distTxt(x.dist, o)}${x.prec != null ? ` · ±${Math.round(x.prec)} m` : ''}</span></span></button>`).join('')}</div>`;
   async function cargarFotos(root) {
@@ -439,7 +571,7 @@
   };
   const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 
-  function abrirCamara(o, alCambiar) {
+  function abrirCamara(o, alCambiar, inicial) {
     const pl = PL, ts = activosDe(o.id);
     const cuads = [...new Set([...ts.filter(t => (pl.marcas[t.id] || {}).m !== 'F').map(t => t.cuadrilla), ...F.listas.cuadrillas])];
     const sigCuad = () => cuads.find(c => !pl.fotos.some(x => x.cuadrilla === c)) || cuads[0] || '';
@@ -453,7 +585,7 @@
       </div>`;
     document.body.appendChild(ov); document.body.classList.add('ft-cam-on');
     const video = $('video', ov), gps = $('[data-gps]', ov), shot = $('[data-shot]', ov), sel = $('[data-cua]', ov);
-    sel.value = sigCuad();
+    sel.value = inicial && cuads.includes(inicial) ? inicial : sigCuad();
     let stream = null, facing = 'environment', pos = null, watch = null, camErr = '', cerrada = false;
     const cuenta = () => { $('[data-n]', ov).textContent = pl.fotos.length ? ` · ${pl.fotos.length} ${pl.fotos.length === 1 ? 'foto' : 'fotos'}` : ''; };
     const pintaGps = () => {
@@ -532,45 +664,6 @@
     if (!blob) throw new Error('No se pudo guardar la foto.');
     const hash = hex(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
     return { blob, url: URL.createObjectURL(blob), cuadrilla, tomadaEn: t.toISOString(), lat: pos.lat, lng: pos.lng, prec: Math.round(pos.prec), dist: d, hash };
-  }
-
-  /* =========================================================
-     TRABAJADORES
-     ========================================================= */
-  function trabHTML(o) {
-    const ts = activosDe(o.id), bajas = F.trab.filter(t => t.obraId === o.id && !t.activo).sort((a, b) => String(b.baja).localeCompare(String(a.baja)));
-    const pend = pendientes(o.id), ed = puedeEditar(o.id);
-    const nAlt = pend.filter(m => ['alta', 'reingreso'].includes(m.tipo)).length, nBaj = pend.filter(m => m.tipo === 'baja').length, nCam = pend.filter(m => m.tipo === 'cambio').length;
-    const nTra = pend.filter(m => m.tipo.startsWith('transferencia')).length;
-    let g0 = '';
-    return `${ed && pend.length ? `<div class="ft-chg rv" style="--d:80"><div><b>${pend.length} ${pend.length === 1 ? 'cambio sin publicar' : 'cambios sin publicar'}</b>
-        <span>${[nAlt && `${nAlt} ${nAlt === 1 ? 'alta' : 'altas'}`, nBaj && `${nBaj} ${nBaj === 1 ? 'baja' : 'bajas'}`, nTra && `${nTra} ${nTra === 1 ? 'transferencia' : 'transferencias'}`, nCam && `${nCam} ${nCam === 1 ? 'cambio' : 'cambios'}`].filter(Boolean).join(' · ')}. La oficina ya los ve; al publicar se avisa a Dirección y al coordinador.</span></div>
-        <button type="button" class="btn btn--solid" data-publicar>${ic('send')}<span>Publicar cambios</span></button></div>` : ''}
-      ${(() => { const u = ultimoAviso(o.id, 'ft_cambios'); return u ? `<p class="ft-res">Último aviso de cambios: ${esc(fechaHora(u.en))} · ${esc(paraTxt(u))}.</p>` : ''; })()}
-      <div class="ft-th rv" style="--d:100"><p><b>${ts.length}</b> ${ts.length === 1 ? 'trabajador activo' : 'trabajadores activos'} en ${esc(o.nombre)}</p>
-        ${ed ? `<button type="button" class="btn btn--solid btn--sm" data-alta>${ic('plus')}<span>Dar de alta</span></button>` : ''}</div>
-      ${ts.length ? `<div class="ft-lista ft-lista--trab">${ts.map(t => {
-        const g = grupo(t), h = g !== g0 ? `<div class="ft-grp"><span>${esc(g)}</span><span>${ts.filter(y => grupo(y) === g).length}</span></div>` : ''; g0 = g;
-        const nuevo = pend.some(m => m.trabajadorId === t.id && ['alta', 'reingreso', 'transferencia_entra'].includes(m.tipo));
-        return `${h}<button type="button" class="ft-w ft-w--btn" data-trab="${esc(t.id)}"><span class="ft-av">${esc(api.iniciales(t.nombre))}</span>
-          <span class="ft-n"><b>${esc(t.nombre)}${nuevo ? '<em class="ft-tag">nuevo</em>' : ''}</b><span>${esc(t.puesto)} · desde el ${esc(fMes(t.alta))}</span></span>${api.ARR}</button>`;
-      }).join('')}</div>` : `<div class="empty empty--sm"><p class="h3">Sin trabajadores activos</p><p class="muted small">${ed ? 'Usa <b>Dar de alta</b> para agregar a la gente de la obra.' : 'El residente da de alta a los trabajadores de su obra.'}</p></div>`}
-      ${bajas.length ? `<details class="ft-bajas"><summary>Dados de baja (${bajas.length})</summary>${bajas.map(t => `<button type="button" class="ft-w ft-w--btn is-off" data-trab="${esc(t.id)}"><span class="ft-av">${esc(api.iniciales(t.nombre))}</span>
-        <span class="ft-n"><b>${esc(t.nombre)}</b><span>${esc(t.puesto)} · baja el ${esc(fMes(t.baja))}${t.motivoBaja ? ' · ' + esc(t.motivoBaja) : ''}</span></span>${api.ARR}</button>`).join('')}</details>` : ''}`;
-  }
-  function bindTrab(sec, o) {
-    $$('[data-alta]', sec).forEach(b => b.addEventListener('click', () => drTrabajador(null)));
-    $$('[data-trab]', sec).forEach(b => b.addEventListener('click', () => drTrabajador(trabDe(b.dataset.trab))));
-    const bp = $('[data-publicar]', sec);
-    if (bp) bp.addEventListener('click', async () => {
-      bp.disabled = true;
-      let r;
-      try { r = ok(await sb().rpc('publicar_movimientos', { p_obra: o.id })); } catch (e) { bp.disabled = false; toast(e.message); return; }
-      if (!r || !r.total) { toast('No había cambios por publicar.'); api.rerender(); return; }
-      toast(`${r.total} ${r.total === 1 ? 'cambio publicado' : 'cambios publicados'}. Avisando a Dirección y al coordinador…`);
-      await avisarCambios(o.id);
-      api.rerender();
-    });
   }
 
   // Contratistas: primero los del directorio que parecen de mano de obra
@@ -714,8 +807,8 @@
         }
         api.closeDrawer(true);
         toast(t ? 'Cambios guardados.' : `${nombre} quedó dado de alta. Publica los cambios al terminar.`);
-        if (!t) { UI.tab = 'trab'; UI.obra = destino; saveUI(); }
-        if (location.hash === '#/fuerza') api.rerender(); else location.hash = '#/fuerza';
+        if (!t) { UI.obra = destino; saveUI(); }
+        if (location.hash === '#/ft-altas') api.rerender(); else location.hash = '#/ft-altas';
       });
     });
   }
@@ -750,13 +843,44 @@
     if (d > h || (d === h && minHM(horaMX()) <= minHM(F.limite))) return { c: 'fut', t: '—' };
     return { c: 'no', t: 'Sin pase' };
   }
-  function regHTML(o) {
-    const dias = diasRango();
-    const enRango = t => t.obraId === o.id ? (t.alta <= UI.hasta && (t.activo || !t.baja || t.baja >= UI.desde)) : false;
+  // Números del periodo de una obra (pases, marcas y fotos)
+  function statsObra(o) {
+    const dias = diasRango(), est = dias.map(d => estadoDia(o, d));
+    const c = k => est.filter(e => e.c === k).length;
+    const pases = est.map(e => e.p).filter(p => p && p.estado === 'enviado');
+    const ms = F.asis.filter(a => pases.some(p => p.id === a.paseId));
+    return { dias, est, ok: c('ok'), late: c('late'), no: c('no'), nl: c('nl'), lab: dias.length - c('fut'), env: c('ok') + c('late'),
+      marcas: ms.length, asist: ms.filter(a => cuentaAsist(a.marca)).length, faltas: ms.filter(a => a.marca === 'F').length, ret: ms.filter(a => a.marca === 'R').length,
+      fuera: F.fotos.filter(f => f.fuera && pases.some(p => p.id === f.paseId)).length };
+  }
+  const RANGOS = () => { const h = hoy(), l = lunesDe(h); return { sem: [l, addDays(l, 5)], ant: [addDays(l, -7), addDays(l, -2)], cuatro: [addDays(l, -21), addDays(l, 5)], mes: [h.slice(0, 8) + '01', h] }; };
+  const rangoHTML = conFechas => {
+    const R0 = RANGOS(), act = Object.keys(R0).find(k => R0[k][0] === UI.desde && R0[k][1] === UI.hasta) || '';
+    return `<div class="seg fz-seg" role="group" aria-label="Periodo">${[['sem', 'Esta semana'], ['ant', 'Semana pasada'], ['cuatro', 'Últimas 4 semanas'], ['mes', 'Este mes']].map(([k, l]) => `<button type="button" data-rango="${k}" aria-pressed="${act === k}">${l}</button>`).join('')}</div>
+      ${conFechas ? `<button type="button" class="tbtn tbtn--sm${act ? '' : ' on'}" data-otro>${ic('cal')}<span>${act ? 'Otro rango' : `${esc(fMes(UI.desde))} – ${esc(fMes(UI.hasta))}`}</span></button>
+      <span class="fz-fechas" data-fechas hidden><input class="in in--sm" type="date" name="desde" value="${esc(UI.desde)}" aria-label="Desde"><input class="in in--sm" type="date" name="hasta" value="${esc(UI.hasta)}" aria-label="Hasta"></span>` : ''}`;
+  };
+  const etiqDia = { ok: 'A tiempo', late: 'Fuera de hora', no: 'Sin pase', nl: 'No se laboró', fut: '' };
+  const leyendaDias = `<div class="fz-leg"><span><i class="d-ok"></i>A tiempo</span><span><i class="d-late"></i>Fuera de hora</span><span><i class="d-no"></i>Sin pase de lista</span><span><i class="d-nl"></i>No se laboró</span></div>`;
+  const pct = (a, b) => (b ? Math.round(a / b * 100) : 0);
+
+  async function pageRegistro() {
+    const x0 = await preparar('ft-registro'); if (x0) return x0;
+    if (UI.obra === 'todas') return pageTodas();
+    const o = obra(UI.obra), st = statsObra(o), dias = st.dias, est = st.est, u = ultimoAviso(o.id, 'ft_reporte');
+    // Calendario: cuadros por día, alineados por día de la semana
+    const hueco = dias.length ? (dow(dias[0]) || 7) - 1 : 0;
+    const cal = `${['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map(d => `<span class="dh">${d}</span>`).join('')}${'<span class="fz-hueco"></span>'.repeat(hueco)}${dias.map((d, i) => {
+      const e = est[i], p = e.p, ms = p && p.estado === 'enviado' ? marcasDe(p) : [];
+      const marca = p && fotosDe(p).some(x => x.fuera) ? ' <b class="ft-bad" title="Foto fuera de la obra">!</b>' : '', corr = p && p.correccion ? ' <b class="ft-warn" title="Corrección pedida">✎</b>' : '';
+      return `<button type="button" class="fz-d d-${e.c}${d === hoy() ? ' d-hoy' : ''}" data-dia-f="${esc(d)}"${p ? '' : ' disabled'}><span class="t"><span>${esc(fMes(d))}</span><span>${p ? (p.estado === 'no_labora' ? '' : esc(horaMX(p.en))) : ''}${marca}${corr}</span></span>
+        <strong>${ms.length ? `${ms.filter(a => cuentaAsist(a.marca)).length}/${ms.length}` : ''}</strong><small>${esc(p && p.estado === 'no_labora' ? (p.motivo.split(':')[0] || 'No se laboró') : etiqDia[e.c])}${ms.length ? ' · asistencia' : ''}</small></button>`;
+    }).join('')}`;
+    // Tabla por trabajador (todo el periodo)
+    const enRango = t => t.obraId === o.id && t.alta <= UI.hasta && (t.activo || !t.baja || t.baja >= UI.desde);
     const conMarca = new Set(F.asis.filter(a => { const p = F.pases.find(x => x.id === a.paseId); return p && p.obraId === o.id && p.fecha >= UI.desde && p.fecha <= UI.hasta; }).map(a => a.trabajadorId));
     const ts = F.trab.filter(t => enRango(t) || conMarca.has(t.id)).sort(porGrupo);
-    const est = dias.map(d => estadoDia(o, d));
-    const celda = (t, d, i) => {
+    const celda = (t, i) => {
       const p = est[i].p;
       if (!p) return `<td><span class="ft-c ft-c--x">${est[i].c === 'fut' ? '' : '?'}</span></td>`;
       if (p.estado === 'no_labora') return '<td><span class="ft-c ft-c--x">–</span></td>';
@@ -766,44 +890,92 @@
       return `<td><span class="ft-c ft-c--${mk.c}" title="${esc(mk.l)}${a.hora ? ' ' + esc(a.hora) : ''}${a.nota ? ' · ' + esc(a.nota) : ''}">${esc(mk.s)}</span></td>`;
     };
     const tot = (t, f) => dias.reduce((n, d, i) => { const p = est[i].p; const a = p && F.asis.find(x => x.paseId === p.id && x.trabajadorId === t.id); return n + (a && f(a.marca) ? 1 : 0); }, 0);
-    const resumen = { ok: est.filter(e => e.c === 'ok').length, late: est.filter(e => e.c === 'late').length, no: est.filter(e => e.c === 'no').length };
-    return `<div class="ft-rango rv" style="--d:80">
-        <label class="fld"><span class="fld-l">Desde</span><input class="in" type="date" name="desde" value="${esc(UI.desde)}"></label>
-        <label class="fld"><span class="fld-l">Hasta</span><input class="in" type="date" name="hasta" value="${esc(UI.hasta)}"></label>
-        <div class="ft-rapidos"><button type="button" class="tbtn tbtn--sm" data-rango="sem">Esta semana</button><button type="button" class="tbtn tbtn--sm" data-rango="ant">Semana pasada</button><button type="button" class="tbtn tbtn--sm" data-rango="mes">Este mes</button></div>
-      </div>
-      <div class="ft-rep rv" style="--d:90">
-        ${esCoord() ? `<button type="button" class="tbtn tbtn--sm" data-rep="pdf">${ic('file')}<span>PDF</span></button>
-          <button type="button" class="tbtn tbtn--sm" data-rep="fotos">${ic('camara')}<span>PDF con fotos (interno)</span></button>` : ''}
-        <button type="button" class="tbtn tbtn--sm" data-rep="xls">${ic('db')}<span>Excel</span></button>
-        ${esCoord() ? `<button type="button" class="btn btn--solid btn--sm" data-rep="gestor">${ic('send')}<span>Enviar al gestor IMSS</span></button>` : ''}
-      </div>
-      ${(() => { const u = ultimoAviso(o.id, 'ft_reporte'); return u ? `<p class="ft-res">Último envío al gestor: ${esc(fechaHora(u.en))} · ${esc(paraTxt(u))}${u.para[0] && u.para[0].desde ? ` · periodo ${esc(fMes(u.para[0].desde))} al ${esc(fMes(u.para[0].hasta))}` : ''}.</p>` : ''; })()}
-      <p class="ft-res rv" style="--d:100">${dias.length} ${dias.length === 1 ? 'día laboral' : 'días laborales'} · <b class="ok">${resumen.ok} a tiempo</b>${resumen.late ? ` · <b class="late">${resumen.late} fuera de hora</b>` : ''}${resumen.no ? ` · <b class="no">${resumen.no} sin pase de lista</b>` : ''}</p>
-      ${ts.length || dias.length ? `<div class="ft-tw rv" style="--d:120"><table class="ft-tabla">
-        <thead><tr><th class="l">Trabajador</th>${dias.map((d, i) => `<th><button type="button" class="ft-dh" data-dia-f="${esc(d)}"${est[i].p ? '' : ' disabled'}>${esc(fCorta(d))}</button></th>`).join('')}<th>Asist.</th><th>Faltas</th></tr>
-          <tr class="ft-ev"><td class="l">Pase de lista</td>${est.map(e => `<td class="${e.c}">${esc(e.t)}${e.p && fotosDe(e.p).some(x => x.fuera) ? ' <span class="ft-bad" title="Foto fuera de la obra">!</span>' : ''}${e.p && e.p.correccion ? ' <span class="ft-warn" title="Corrección pedida">✎</span>' : ''}</td>`).join('')}<td></td><td></td></tr></thead>
-        <tbody>${ts.map(t => `<tr><td class="l"><b>${esc(t.nombre)}</b><span>${esc(t.puesto)} · ${esc(t.cuadrilla)} · ${esc(t.contratista)}${t.obraId !== o.id ? ' · transferido' : !t.activo ? ' · baja ' + esc(fMes(t.baja)) : t.alta >= UI.desde ? ' · alta ' + esc(fMes(t.alta)) : ''}</span></td>${dias.map((d, i) => celda(t, d, i)).join('')}<td>${tot(t, cuentaAsist)}</td><td>${tot(t, m => m === 'F')}</td></tr>`).join('')}</tbody>
-      </table></div>
-      <p class="ft-ley muted small"><span class="ft-c ft-c--a">✓</span> Asistencia <span class="ft-c ft-c--f">✗</span> Falta <span class="ft-c ft-c--o">R</span> Retardo · M medio día · P permiso · I incapacidad · C comisión · D descanso <span class="ft-c ft-c--x">?</span> Sin pase de lista · Toca un día para ver sus fotos.</p>`
-      : '<div class="empty empty--sm"><p class="h3">Sin datos en estas fechas</p></div>'}`;
+    return {
+      title: 'Registro de asistencia',
+      html: `<section class="page ft">
+        ${barraObras('ft-registro')}
+        ${heroHTML(`${esc(o.nombre)} · residente ${esc(residenteDe(o))} · del ${esc(fFecha(UI.desde))} al ${esc(fFecha(UI.hasta))}`, 'Registro de<br>asistencia',
+          `<span class="h-count"><b>${st.lab}</b> ${st.lab === 1 ? 'día laboral' : 'días laborales'} · <b>${st.env}</b> ${st.env === 1 ? 'pase enviado' : 'pases enviados'}</span><span class="pill">${u ? 'Último envío al gestor: ' + esc(fMes(FMX.format(new Date(u.en)))) : 'Aún no se manda al gestor'}</span>`,
+          sqHTML('ok', 'Pases a<br>tiempo', `${st.ok}<span class="sq-de">/${st.env}</span>`, st.late ? `${st.late} ${st.late === 1 ? 'llegó' : 'llegaron'} después de las ${esc(F.limite)}` : 'Ninguno fuera de hora')
+          + sqHTML(st.no ? 'bad' : 'ok', 'Días sin<br>pase de lista', st.no, st.no ? 'se avisó a la oficina cada día' : 'Ningún día sin pase', 140))}
+        ${esCoord() ? `<button type="button" class="btn btn--solid fz-solo-cel" data-gestor>${ic('send')}<span>Enviar al gestor IMSS</span></button>` : ''}
+        <div class="fz-tools rv" style="--d:100">${rangoHTML(true)}<span class="fz-esp"></span>
+          ${esCoord() ? `<button type="button" class="tbtn tbtn--sm" data-rep="pdf">${ic('file')}<span>PDF</span></button><button type="button" class="tbtn tbtn--sm" data-rep="fotos">${ic('camara')}<span>PDF con fotos</span></button>` : ''}
+          <button type="button" class="tbtn tbtn--sm" data-rep="xls">${ic('db')}<span>Excel</span></button></div>
+        ${u ? `<p class="fz-help rv">Último envío al gestor: ${esc(fechaHora(u.en))} · ${esc(paraTxt(u))}${u.para[0] && u.para[0].desde ? ` · periodo ${esc(fMes(u.para[0].desde))} al ${esc(fMes(u.para[0].hasta))}` : ''}.</p>` : ''}
+        <div class="fz-kpis rv" style="--d:120">
+          <div class="fz-k"><p>Asistencia promedio</p><strong>${st.marcas ? pct(st.asist, st.marcas) + '%' : '—'}</strong><small>de la plantilla en los días con pase</small></div>
+          <div class="fz-k"><p>Faltas</p><strong class="b">${st.faltas}</strong><small>en ${st.env} ${st.env === 1 ? 'día' : 'días'} con pase</small></div>
+          <div class="fz-k"><p>Retardos</p><strong class="w">${st.ret}</strong><small>con hora de llegada</small></div>
+          <div class="fz-k"><p>Fotos fuera de la obra</p><strong>${st.fuera}</strong><small>${st.fuera ? 'revisa esos días' : 'todas dentro del radio'}</small></div>
+        </div>
+        <div class="fz-sec rv"><h2>Día por día</h2><small>Toca un día para ver sus fotos${esCoord() ? ' y corregir' : ''}</small></div>
+        ${dias.length ? `<div class="fz-cal rv">${cal}</div>${leyendaDias}` : '<div class="empty empty--sm"><p class="h3">Sin días en este periodo</p></div>'}
+        <div class="fz-sec rv"><h2>Por trabajador</h2><small>Todo el periodo · desliza para ver más días</small></div>
+        ${ts.length && dias.length ? `<div class="ft-tw rv"><table class="ft-tabla">
+          <thead><tr><th class="l">Trabajador</th>${dias.map((d, i) => `<th><button type="button" class="ft-dh" data-dia-f="${esc(d)}"${est[i].p ? '' : ' disabled'}>${esc(fCorta(d))}</button></th>`).join('')}<th>Asist.</th><th>Faltas</th></tr></thead>
+          <tbody>${ts.map(t => `<tr><td class="l"><b>${esc(t.nombre)}</b><span>${esc(t.puesto)} · ${esc(t.cuadrilla)}${t.obraId !== o.id ? ' · transferido' : !t.activo ? ' · baja ' + esc(fMes(t.baja)) : t.alta >= UI.desde ? ' · alta ' + esc(fMes(t.alta)) : ''}</span></td>${dias.map((d, i) => celda(t, i)).join('')}<td><b>${tot(t, cuentaAsist)}</b></td><td class="ft-bad">${tot(t, m => m === 'F')}</td></tr>`).join('')}</tbody>
+        </table></div>
+        <p class="ft-ley muted small"><span class="ft-c ft-c--a">✓</span> Asistencia <span class="ft-c ft-c--f">✗</span> Falta <span class="ft-c ft-c--o">R</span> Retardo · M medio día · P permiso · I incapacidad · C comisión · D descanso <span class="ft-c ft-c--x">?</span> Sin pase de lista</p>`
+          : '<div class="empty empty--sm"><p class="muted small">Sin trabajadores en este periodo.</p></div>'}
+      </section>`,
+      bind(sec) {
+        bindObras(sec); marcarGrupo(); bindRango(sec);
+        const tw = $('.ft-tw', sec); if (tw) tw.scrollLeft = tw.scrollWidth;   // abre en los días más recientes
+        $$('[data-dia-f]', sec).forEach(b => b.addEventListener('click', () => { const p = paseDe(o.id, b.dataset.diaF); if (p) drDia(p); }));
+        $$('[data-rep]', sec).forEach(b => b.addEventListener('click', () => { const k = b.dataset.rep; if (k === 'xls') excelFT(o); else verPdf(o, k === 'fotos', b); }));
+        $$('[data-gestor]', sec).forEach(b => b.addEventListener('click', () => drGestor(o)));
+      }
+    };
   }
-  function bindReg(sec, o) {
-    const f1 = $('[name=desde]', sec), f2 = $('[name=hasta]', sec);
+  function bindRango(sec) {
     const fijar = (a, b) => { if (!a || !b) return; if (b < a) [a, b] = [b, a]; UI.desde = a; UI.hasta = b; saveUI(); api.rerender(); };
-    f1.addEventListener('change', () => fijar(f1.value, f2.value));
-    f2.addEventListener('change', () => fijar(f1.value, f2.value));
-    $$('[data-rango]', sec).forEach(b => b.addEventListener('click', () => {
-      const h = hoy(), l = lunesDe(h);
-      if (b.dataset.rango === 'sem') fijar(l, addDays(l, 5));
-      else if (b.dataset.rango === 'ant') fijar(addDays(l, -7), addDays(l, -2));
-      else fijar(h.slice(0, 8) + '01', h);
-    }));
-    $$('[data-dia-f]', sec).forEach(b => b.addEventListener('click', () => { const p = paseDe(o.id, b.dataset.diaF); if (p) drDia(p); }));
-    $$('[data-rep]', sec).forEach(b => b.addEventListener('click', () => {
-      const k = b.dataset.rep;
-      if (k === 'xls') excelFT(o); else if (k === 'gestor') drGestor(o); else verPdf(o, k === 'fotos', b);
-    }));
+    $$('[data-rango]', sec).forEach(b => b.addEventListener('click', () => { const r = RANGOS()[b.dataset.rango]; fijar(r[0], r[1]); }));
+    const bo = $('[data-otro]', sec), fs = $('[data-fechas]', sec);
+    if (bo && fs) {
+      bo.addEventListener('click', () => { fs.hidden = !fs.hidden; });
+      $$('input', fs).forEach(i => i.addEventListener('change', () => fijar($('[name=desde]', fs).value, $('[name=hasta]', fs).value)));
+    }
+  }
+
+  // Todas las obras: comparativo (solo la oficina)
+  function pageTodas() {
+    const L = obrasVis().map(o => [o, statsObra(o)]), sum = f => L.reduce((a, x) => a + f(x[1]), 0);
+    const h = hoy();
+    const hoyDe = o => { const p = paseDe(o.id, h);
+      if (p) return p.estado === 'no_labora' ? ['gris', `No se labora (${(p.motivo.split(':')[0] || '').toLowerCase()})`] : [p.aTiempo ? 'ok' : 'sun', `Pase enviado a las ${horaMX(p.en)}${p.aTiempo ? '' : ' (tarde)'}`];
+      if (dow(h) === 0) return ['gris', 'Domingo'];
+      if (!activosDe(o.id).length) return ['gris', 'Sin trabajadores'];
+      return minHM(horaMX()) > minHM(F.limite) ? ['bad', 'Sin pase · ya pasó la hora'] : ['sun', 'Pase pendiente']; };
+    const sinPase = L.filter(x => x[1].no);
+    return {
+      title: 'Registro de asistencia',
+      html: `<section class="page ft">
+        ${barraObras('ft-registro')}
+        ${heroHTML(`${L.length} obras activas · del ${esc(fFecha(UI.desde))} al ${esc(fFecha(UI.hasta))}`, 'Registro de<br>asistencia',
+          `<span class="h-count"><b>${L.reduce((a, x) => a + activosDe(x[0].id).length, 0)}</b> trabajadores · <b>${sum(s => s.env)}</b> pases enviados</span><span class="pill">Todas las obras</span>`,
+          sqHTML('ok', 'Pases a<br>tiempo', `${sum(s => s.ok)}<span class="sq-de">/${sum(s => s.env)}</span>`, `${sum(s => s.late)} fuera de hora entre las ${L.length} obras`)
+          + sqHTML(sum(s => s.no) ? 'bad' : 'ok', 'Días sin<br>pase de lista', sum(s => s.no), sinPase.length ? esc(sinPase.map(x => `${x[0].nombre}: ${x[1].no}`).join(' · ')) : 'Ningún día sin pase', 140))}
+        <div class="fz-tools rv" style="--d:100">${rangoHTML(true)}</div>
+        <div class="fz-sec rv"><h2>Comparativo por obra</h2><small>Toca una obra para ver su registro completo</small></div>
+        <div class="fz-cmp rv">${L.map(([o, s], k) => { const [c, t] = hoyDe(o), u = ultimoAviso(o.id, 'ft_reporte');
+          return `<button type="button" class="fz-ocard" data-obra-sel="${esc(o.id)}">
+            <span class="fz-oh"><span><b>${esc(o.nombre)}</b><small>${esc(residenteDe(o))} · ${activosDe(o.id).length} trabajadores</small></span>${api.ARR}</span>
+            <span class="fz-onum"><span><strong>${s.ok}<span>/${s.env}</span></strong><small>a tiempo</small></span><span><strong class="w">${s.late}</strong><small>tarde</small></span><span><strong class="b">${s.no}</strong><small>sin pase</small></span><span><strong>${s.marcas ? pct(s.asist, s.marcas) + '%' : '—'}</strong><small>asistencia</small></span></span>
+            <span class="fz-hoy"><i class="e-${c}"></i>Hoy: ${esc(t)}</span>
+            <span class="fz-mini">${s.dias.map((d, i) => `<i class="d-${s.est[i].c}${d === h ? ' d-hoy' : ''}" title="${esc(fMes(d))} · ${esc(etiqDia[s.est[i].c])}"></i>`).join('')}</span>
+            <span class="fz-gst">${u ? 'Último envío al gestor: ' + esc(fMes(FMX.format(new Date(u.en)))) : '<b>Aún no se manda al gestor</b>'}</span>
+          </button>`; }).join('')}</div>
+        ${leyendaDias}
+        <div class="fz-sec rv"><h2>Hoy en las obras</h2><small>${esc(fDia(h))} · límite ${esc(F.limite)}</small></div>
+        <div class="ft-tw rv"><table class="ft-tabla fz-hoyt"><thead><tr><th class="l">Obra</th><th>Residente</th><th>Pase de hoy</th><th>Asistencia</th><th>Faltas</th><th>Fotos</th><th>Cambios sin publicar</th></tr></thead><tbody>
+          ${L.map(([o]) => { const p = paseDe(o.id, h), [c, t] = hoyDe(o), ms = p && p.estado === 'enviado' ? marcasDe(p) : [], pe = pendientes(o.id).length;
+            return `<tr><td class="l"><b>${esc(o.nombre)}</b></td><td>${esc(residenteDe(o))}</td><td><span class="fz-est"><i class="e-${c}"></i>${esc(t)}</span></td>
+              <td>${ms.length ? `${ms.filter(a => cuentaAsist(a.marca)).length}/${ms.length}` : '—'}</td><td>${ms.length ? ms.filter(a => a.marca === 'F').length : '—'}</td><td>${p && p.estado === 'enviado' ? fotosDe(p).length : '—'}</td><td>${pe || '—'}</td></tr>`; }).join('')}
+        </tbody></table></div>
+      </section>`,
+      bind(sec) { bindObras(sec); marcarGrupo(); bindRango(sec); }
+    };
   }
 
   /* =========================================================
@@ -994,10 +1166,13 @@
   }
 
   return {
-    pages: { fuerza: pageFT },
-    titulos: { fuerza: 'Fuerza de trabajo' },
-    acciones: { fuerza: { label: 'Dar de alta', act: 'alta-trabajador', puede: () => obrasEdit().length > 0 } },
-    onAct(a) { if (a === 'alta-trabajador') drTrabajador(null); },
+    pages: { fuerza: pageFuerza, 'ft-altas': pageAltas, 'ft-pase': pagePase, 'ft-registro': pageRegistro },
+    titulos: { 'ft-altas': 'Altas y bajas', 'ft-pase': 'Pase de lista', 'ft-registro': 'Registro' },
+    acciones: {
+      'ft-altas': { label: 'Dar de alta', act: 'alta-trabajador', puede: () => obrasEdit().length > 0 },
+      'ft-registro': { label: 'Enviar al gestor IMSS', act: 'gestor-ft', puede: () => esCoord() && UI.obra !== 'todas' && !!obra(UI.obra) }
+    },
+    onAct(a) { if (a === 'alta-trabajador') drTrabajador(null); if (a === 'gestor-ft' && obra(UI.obra)) drGestor(obra(UI.obra)); },
     cargar, chrome
   };
 });
