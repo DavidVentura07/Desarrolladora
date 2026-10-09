@@ -46,6 +46,8 @@
       return { nombre: p ? (p.nombre || p.correo) : '', correo: p ? p.correo : '', telefono: p ? p.telefono || '' : '' };
     })(),
     fondoCaja: o.fondo_caja == null ? null : num(o.fondo_caja),   // v0.9: fondo fijo de caja chica (vacío = se reembolsa)
+    // v0.13: punto de la obra y radio para revisar las fotos del pase de lista (12-fuerza-trabajo.sql)
+    conUbicacion: 'lat' in o, lat: o.lat == null ? null : num(o.lat), lng: o.lng == null ? null : num(o.lng), radioM: o.radio_m == null ? 150 : num(o.radio_m),
     historial: [],   // residentes anteriores (v0.7, tabla obra_residentes); se llena en cargar()
     suplentes: arr(o.obra_suplentes).map(s => ({ id: s.id, perfilId: s.perfil_id, nombre: quien(s.perfil_id), desde: s.desde, hasta: s.hasta, motivo: str(s.motivo) }))
       .sort((a, b) => b.desde.localeCompare(a.desde)),
@@ -257,6 +259,7 @@
     async guardarObra(o) {
       const fila = { nombre: str(o.nombre), clave: str(o.clave).toUpperCase(), direccion: str(o.direccion), estatus: o.estatus === 'cerrada' ? 'cerrada' : 'activa', residente_id: o.residenteId || null };
       if ('fondoCaja' in o) fila.fondo_caja = o.fondoCaja === '' || o.fondoCaja == null ? null : num(o.fondoCaja);
+      if ('lat' in o) Object.assign(fila, { lat: o.lat, lng: o.lng, radio_m: Math.round(num(o.radioM) || 150) });   // solo si ya se corrió 12
       if (o.id && find('obras', o.id)) ok(await sb().from('obras').update(fila).eq('id', o.id).select('id'));
       else { o.id = o.id || uid(); ok(await sb().from('obras').insert(Object.assign({ id: o.id }, fila)).select('id')); }
       return o.id;

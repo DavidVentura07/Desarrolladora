@@ -1703,6 +1703,12 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
           <label class="fld"><span class="fld-l">Estatus</span><select class="in" name="estatus"${dis}><option value="activa"${x.estatus !== 'cerrada' ? ' selected' : ''}>Activa</option><option value="cerrada"${x.estatus === 'cerrada' ? ' selected' : ''}>Cerrada</option></select></label>
           <label class="fld fld--wide"><span class="fld-l">Dirección</span><input class="in" name="direccion" value="${esc(x.direccion)}"${dis}></label>
           <label class="fld"><span class="fld-l">Fondo fijo de caja chica</span><input class="in" name="fondo" type="number" min="0" step="0.01" value="${x.fondoCaja == null ? '' : esc(x.fondoCaja)}" placeholder="Sin fondo"${dis}><span class="fld-h">Opcional. Vacío = el residente paga y se le reembolsa.</span></label>
+          ${x.conUbicacion || D.obras.some(y => y.conUbicacion) ? `<div class="fld fld--wide"><span class="fld-l">Ubicación para el pase de lista</span>
+            <div class="ft-ubi"><input class="in" name="ubi" value="${x.lat != null ? esc(x.lat.toFixed(6) + ', ' + x.lng.toFixed(6)) : ''}" placeholder="19.432600, -99.133200" autocomplete="off"${dis}>
+              ${jefe ? `<button type="button" class="tbtn tbtn--sm" data-ubi-aqui>${I.pin || ''}<span>Usar mi ubicación</span></button>` : ''}
+              ${x.lat != null ? `<a class="tbtn tbtn--sm" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(x.lat + ',' + x.lng)}">Ver en el mapa</a>` : ''}</div>
+            <span class="fld-h">Pega las coordenadas de Google Maps (clic derecho sobre la obra → clic en las coordenadas para copiarlas) o, estando en la obra, usa tu ubicación. Las fotos del pase de lista se comparan con este punto.</span></div>
+          <label class="fld"><span class="fld-l">Radio de la obra (m)</span><input class="in" name="radio" type="number" min="20" max="3000" step="10" value="${esc(x.radioM || 150)}"${dis}><span class="fld-h">Una foto tomada más lejos sale con alerta roja.</span></label>` : ''}
         </div></div></fieldset>
         ${nueva ? '' : `<fieldset class="fs"><legend><span class="mono">2</span>Residente de obra</legend><div class="fs-b">
           <div class="res-now"><span class="p-av">${esc(api.iniciales(x.residente.nombre))}</span><div><b>${esc(x.residente.nombre || 'Sin residente')}</b><small>Titular${(() => { const v = x.historial.find(hh => !hh.hasta); return v ? ' desde el ' + esc(fDate(v.desde)) : ''; })()}</small></div>
@@ -1732,6 +1738,16 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
       const reabrir = async () => { await cargar(); api.rerender(); drObra(obra(x.id)); };
       const cam = $('[data-cambiar]', panel);
       if (cam) cam.addEventListener('click', () => drResidente(obra(x.id)));
+      const aqui = $('[data-ubi-aqui]', panel);
+      if (aqui) aqui.addEventListener('click', () => {
+        if (!navigator.geolocation) { toast('Este navegador no da la ubicación.'); return; }
+        aqui.disabled = true; toast('Buscando tu ubicación…');
+        navigator.geolocation.getCurrentPosition(p => {
+          aqui.disabled = false;
+          f.ubi.value = `${p.coords.latitude.toFixed(6)}, ${p.coords.longitude.toFixed(6)}`; api.markDirty();
+          toast(`Ubicación tomada (precisión ±${Math.round(p.coords.accuracy)} m).`);
+        }, e => { aqui.disabled = false; toast(e.code === 1 ? 'Sin permiso para la ubicación.' : 'No se pudo obtener la ubicación.'); }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+      });
       const add = $('[data-sup-add]', panel);
       if (add) add.addEventListener('click', async () => {
         const pid = f.sperfil.value, d1 = f.sdesde.value, d2 = f.shasta.value;
@@ -1748,10 +1764,20 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
         const nombre = f.nombre.value.trim();
         if (!nombre) { err().textContent = 'Escribe el nombre de la obra.'; f.nombre.classList.add('invalid'); return; }
         if (D.obras.some(y => y.id !== x.id && norm(y.nombre) === norm(nombre))) { err().textContent = 'Ya existe una obra con ese nombre.'; return; }
+        // v0.13: coordenadas "19.43, -99.13" o una liga de Google Maps (…@19.43,-99.13… o ?q=19.43,-99.13)
+        const ubi = {};
+        if (f.ubi) {
+          const t = f.ubi.value.trim(), m = /(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/.exec(t);
+          if (t && !m) { err().textContent = 'No reconozco las coordenadas: pégalas como 19.432600, -99.133200.'; return; }
+          const la = m ? +m[1] : null, ln = m ? +m[2] : null, rad = Number(f.radio.value) || 150;
+          if (m && (Math.abs(la) > 90 || Math.abs(ln) > 180)) { err().textContent = 'Las coordenadas están fuera de rango.'; return; }
+          if (rad < 20 || rad > 3000) { err().textContent = 'El radio debe estar entre 20 y 3000 m.'; return; }
+          Object.assign(ubi, { lat: la, lng: ln, radioM: rad });
+        }
         const anterior = o ? o.nombre : '';
         ocupado(panel, true, 'Guardando…');
         try {
-          await R.guardarObra({ id: o ? o.id : '', nombre, clave: f.clave.value.trim().replace(/\s+/g, ''), direccion: f.direccion.value.trim(), estatus: f.estatus.value, residenteId: nueva ? f.residente.value : x.residenteId, fondoCaja: f.fondo.value });
+          await R.guardarObra(Object.assign({ id: o ? o.id : '', nombre, clave: f.clave.value.trim().replace(/\s+/g, ''), direccion: f.direccion.value.trim(), estatus: f.estatus.value, residenteId: nueva ? f.residente.value : x.residenteId, fondoCaja: f.fondo.value }, ubi));
         } catch (x2) { ocupado(panel, false, 'Guardar'); err().textContent = x2.message; return; }
         await syncListaObras(anterior, nombre);
         await cargar();
