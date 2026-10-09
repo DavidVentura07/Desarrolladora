@@ -20,7 +20,8 @@
     { id: 'admin', puede: 'Todo, igual que Dirección, y además corrige requisiciones ya enviadas o revisadas: mantenimiento y soporte de la plataforma.' },
     { id: 'compras', puede: 'Edita el directorio; ve las requisiciones revisadas; registra cotizaciones, facturas, XML y comprobantes de pago.' },
     { id: 'coordinador', puede: 'Ve todas las obras; aprueba o rechaza cada material, devuelve requisiciones y asigna suplentes.' },
-    { id: 'residente', puede: 'Solo su obra (o la que cubre como suplente): arma y envía requisiciones y sube la remisión al recibir.' }
+    { id: 'residente', puede: 'Solo su obra (o la que cubre como suplente): arma y envía requisiciones y sube la remisión al recibir.' },
+    { id: 'consulta', puede: 'Solo lectura, para una pantalla compartida (iPad de la oficina): ve obras, requisiciones, colados aprobados y el directorio; no ve compras, pagos, caja chica ni datos fiscales, y no modifica nada.' }
   ];
   const rolLabel = r => N.ROLES[r] || r;
   const fecha = s => { const d = s ? new Date(s) : null; return d && !isNaN(d) ? d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'; };

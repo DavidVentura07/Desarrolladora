@@ -905,7 +905,20 @@
       <label class="chk chk--wa"><input type="checkbox" name="t-wa"${t.whatsapp ? ' checked' : ''}><span>${I.wa}WhatsApp</span></label>
       <button type="button" class="ibtn" data-rm aria-label="Quitar teléfono">${I.close}</button>
     </div>`;
-  const dlEtiqTel = () => (LISTAS.etiquetasTel || []).map(s => `<option value="${esc(s)}">`).join('');
+  // Persona de contacto dentro del formulario del proveedor (alta y edición): solo lo básico; lo demás, desde la ficha
+  const pcRow = n => `
+    <div class="pc" data-pc>
+      <div class="pc-h"><b>Persona ${n}</b><button type="button" class="ibtn" data-pc-rm aria-label="Quitar persona" title="Quitar">${I.close}</button></div>
+      <div class="grid2">
+        ${field('Nombre', inp('pc-nombre', '', 'maxlength="120" autocomplete="off" placeholder="Ej. Juan Pérez"'))}
+        ${field('Puesto', inp('pc-puesto', '', 'maxlength="120" autocomplete="off" placeholder="Ej. Ventas"'))}
+        ${field('Celular o teléfono', inp('pc-tel', '', 'type="tel" inputmode="tel" placeholder="55 1234 5678"'))}
+        ${field('Correo', inp('pc-correo', '', 'type="email" maxlength="160" autocomplete="off"'))}
+      </div>
+      <label class="chk chk--wa"><input type="checkbox" name="pc-wa" checked><span>${I.wa}El teléfono tiene WhatsApp</span></label>
+    </div>`;
+  const pcNumerar = root => $$('[data-pc]', root).forEach((b, i) => { $('.pc-h b', b).textContent = `Persona ${i + 1}`; });
+  const dlEtiqTel = () =>(LISTAS.etiquetasTel || []).map(s => `<option value="${esc(s)}">`).join('');
   const telRep = tels => `
     <div class="rep" data-rep="tel">
       ${(tels.length ? tels : [{}]).map(telRow).join('')}
@@ -1015,6 +1028,15 @@
       }
       const rm = e.target.closest('[data-rm]');
       if (rm) { rm.closest('[data-row]').remove(); markDirty(); }
+      // Personas de contacto en el formulario del proveedor
+      if (e.target.closest('[data-pc-add]')) {
+        const box = $('[data-pcs]', root);
+        box.insertAdjacentHTML('beforeend', pcRow($$('[data-pc]', box).length + 1));
+        $('[name="pc-nombre"]', box.lastElementChild).focus();
+        markDirty();
+      }
+      const pcRm = e.target.closest('[data-pc-rm]');
+      if (pcRm) { pcRm.closest('[data-pc]').remove(); pcNumerar(root); markDirty(); }
       const x = e.target.closest('[data-chip-x]');
       if (x) { const box = x.closest('[data-chips]'); x.parentElement.remove(); markDirty(); if (box && !$('.chip-menu', box).hidden) pintarMenu(box); }
       // Menú de selección múltiple
@@ -1179,8 +1201,15 @@
         ${fieldLista('Zona de cobertura', 'cobertura', chips('cobertura', 'cobertura', p.cobertura, 'Busca o escribe una zona…'), { wide: true, hint: 'Puede atender varias zonas: estados, alcaldías o “cerca de obra”.' })}
         ${fieldLista('Etiquetas', 'etiquetas', chips('etiquetas', 'etiquetas', p.etiquetas, 'Ej. urgente, garantía…'), { wide: true })}`)}
 
-      ${fset('03', 'Datos de contacto generales', `
-        <div class="fld fld--wide"><span class="fld-l">Teléfonos</span>${telRep(p.telefonos)}</div>
+      ${fset('03', 'Personas de contacto', `
+        <p class="fld-h pc-ayuda">${I.alert}<span>Aquí van las <b>personas</b> con quien hablamos: su nombre y su celular. En “Datos generales de la empresa” va solo el teléfono de oficina o conmutador.</span></p>
+        ${(p.contactos || []).length ? `<ul class="pc-ya">${p.contactos.map(c => `<li>${I.user}<b>${esc(c.nombre)}</b>${c.puesto ? ` · ${esc(c.puesto)}` : ''}${c.activo === false ? ' <span class="muted">(ya no trabaja ahí)</span>' : ''}</li>`).join('')}</ul>
+        <p class="fld-h">Estas personas se editan desde la ficha del proveedor. Aquí puedes agregar otras.</p>` : ''}
+        <div data-pcs>${nuevo || !(p.contactos || []).length ? pcRow(1) : ''}</div>
+        <button type="button" class="tbtn tbtn--sm" data-pc-add>${I.plus}<span>Agregar ${nuevo || !(p.contactos || []).length ? 'otra persona' : 'persona'}</span></button>`)}
+
+      ${fset('04', 'Datos generales de la empresa', `
+        <div class="fld fld--wide"><span class="fld-l">Teléfonos de la empresa</span>${telRep(p.telefonos)}</div>
         <div class="grid2">
           ${field('Correo general', inp('correo', p.correo, 'type="email" maxlength="160" autocomplete="off"'))}
           ${field('Sitio web', inp('sitioWeb', p.sitioWeb, 'maxlength="200" placeholder="empresa.com" autocomplete="off"'))}
@@ -1188,21 +1217,10 @@
         ${field('Dirección', area('direccion', p.direccion, 2, 'maxlength="300"'), { wide: true })}
         ${field('Liga de Google Maps', inp('mapsUrl', p.mapsUrl, 'type="url" maxlength="500" placeholder="Opcional: si no, se busca la dirección"'), { wide: true })}`)}
 
-      ${nuevo ? fset('04', 'Contacto principal <span class="opt">opcional</span>', `
-        <div class="grid2">
-          ${field('Nombre', inp('c-nombre', '', 'maxlength="120" autocomplete="off"'))}
-          ${field('Puesto', inp('c-puesto', '', 'maxlength="120" autocomplete="off"'))}
-          ${field('Teléfono', inp('c-tel', '', 'type="tel" inputmode="tel" placeholder="55 1234 5678"'))}
-          ${field('Correo', inp('c-correo', '', 'type="email" maxlength="160" autocomplete="off"'))}
-        </div>
-        <label class="chk chk--wa"><input type="checkbox" name="c-wa" checked><span>${I.wa}El teléfono tiene WhatsApp</span></label>
-        <div class="fld fld--wide"><span class="fld-l">Medio de contacto preferido</span>${toggles('c-medios', C.medios, [])}</div>
-        <p class="fld-h">Podrás agregar más contactos desde la ficha del proveedor.</p>`) : ''}
-
-      ${fset(nuevo ? '05' : '04', 'Obras', `
+      ${fset('05', 'Obras', `
         ${fieldLista('Obras en las que ha participado', 'obras', chips('obras', 'obras', p.obras, 'Busca o escribe una obra…'), { wide: true })}`)}
 
-      ${fset(nuevo ? '06' : '05', 'Notas', area('notas', p.notas, 5, 'maxlength="4000" placeholder="Acuerdos, experiencias, advertencias…"'))}`;
+      ${fset('06', 'Notas', area('notas', p.notas, 5, 'maxlength="4000" placeholder="Acuerdos, experiencias, advertencias…"'))}`;
 
     openDrawer(nuevo ? 'Nuevo proveedor' : 'Editar proveedor', nuevo ? 'Alta' : esc(nombre(p)), body, async form => {
       const bad = (name, msg) => { const el = $(`[name="${name}"]`, form); if (el) el.classList.add('invalid'); return msg; };
@@ -1233,18 +1251,20 @@
       if (data.sitioWeb && !safeUrl(data.sitioWeb)) return bad('sitioWeb', 'Revisa la dirección del sitio web.');
       if (data.mapsUrl && !/^https?:\/\//i.test(data.mapsUrl)) return bad('mapsUrl', 'Revisa la liga de Google Maps: debe empezar con https://');
 
-      if (nuevo) {
-        const cn = val(form, 'c-nombre');
-        const ct = val(form, 'c-tel');
-        const cc = val(form, 'c-correo');
-        if (cc && !mailHref(cc)) return bad('c-correo', 'Revisa el correo del contacto.');
-        if (cn || ct || cc) {
-          data.contactos = [Object.assign(S.nuevoContacto(), {
-            nombre: cn || 'Contacto', puesto: val(form, 'c-puesto'), correo: cc,
-            telefonos: ct ? [{ numero: ct, etiqueta: 'Celular', whatsapp: $('[name="c-wa"]', form).checked }] : [],
-            medios: readChecks(form, 'c-medios'), fechaIngreso: today()
-          })];
-        }
+      // Personas de contacto: el nombre es obligatorio si se escribió algo en el bloque
+      const nuevos = [];
+      for (const b of $$('[data-pc]', form)) {
+        const v = n => { const el = $(`[name="${n}"]`, b); return el ? el.value.trim() : ''; };
+        const marca = (n, msg) => { const el = $(`[name="${n}"]`, b); if (el) { el.classList.add('invalid'); el.focus(); } return msg; };
+        const cn = v('pc-nombre'), ct = v('pc-tel'), cc = v('pc-correo'), cp = v('pc-puesto');
+        if (!cn && !ct && !cc && !cp) continue;
+        if (!cn) return marca('pc-nombre', 'Escribe el nombre de la persona de contacto.');
+        if (cc && !mailHref(cc)) return marca('pc-correo', 'Revisa el correo de la persona de contacto.');
+        nuevos.push(Object.assign(S.nuevoContacto(), {
+          nombre: cn, puesto: cp, correo: cc,
+          telefonos: ct ? [{ numero: ct, etiqueta: 'Celular', whatsapp: $('[name="pc-wa"]', b).checked }] : [],
+          medios: [], fechaIngreso: today()
+        }));
       }
 
       const dup = duplicados(data);
@@ -1256,10 +1276,27 @@
         return 'Revisa el aviso de posible duplicado.';
       }
 
-      // Al editar, los contactos se toman de lo guardado (una lista editada mientras el panel estaba abierto pudo cambiarlos)
-      if (!nuevo) delete data.contactos;
-      const saved = await S.save(data);
-      toast(nuevo ? 'Proveedor agregado.' : 'Cambios guardados.');
+      // Proveedor nuevo sin ninguna persona: se avisa una vez (pasó que el celular de la persona quedó como teléfono de la empresa)
+      const pcBox = $('[data-pcs]', form);
+      if (nuevo && !nuevos.length && !pcBox.dataset.ok) {
+        pcBox.dataset.ok = '1';
+        pcBox.insertAdjacentHTML('beforebegin', `<p class="warn pc-warn">${I.alert}<span>No agregaste ninguna persona de contacto. Si alguno de los teléfonos es de una persona, escribe aquí su nombre y su celular. Si de verdad no hay a quién contactar, vuelve a presionar Guardar.</span></p>`);
+        pcBox.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+        const n1 = $('[name="pc-nombre"]', pcBox); if (n1) n1.focus();
+        return 'Falta la persona de contacto.';
+      }
+
+      let saved;
+      if (nuevo) {
+        data.contactos = nuevos;
+        saved = await S.save(data);
+      } else {
+        // Al editar, los contactos se toman de lo guardado (una lista editada mientras el panel estaba abierto pudo cambiarlos)
+        delete data.contactos;
+        saved = await S.save(data);
+        for (const c of nuevos) await S.saveContacto(saved.id, c);
+      }
+      toast(nuevo ? 'Proveedor agregado.' : nuevos.length ? `Cambios guardados con ${nuevos.length === 1 ? 'una persona nueva' : nuevos.length + ' personas nuevas'}.` : 'Cambios guardados.');
       if (nuevo) location.hash = '#/p/' + encodeURIComponent(saved.id);
       else rerender();
     });

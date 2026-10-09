@@ -1622,6 +1622,7 @@ body.welcome-open { overflow: hidden; }
 .btn--sm { height: 36px; padding: 0 14px; font-size: 13px; }
 .kb-x { width: 36px; padding: 0; justify-content: center; color: var(--muted); }
 .ogroup-h .btn--sm { margin-left: auto; }
+.panel-h .rev-todos { margin-left: auto; color: var(--ok, #1a7f4b); }
 @media (max-width: 900px) {
   .kitem { flex-direction: column; }
   .k-side { width: 100%; flex-direction: row; justify-content: space-between; align-items: center; }
@@ -1635,6 +1636,7 @@ body.welcome-open { overflow: hidden; }
 
 /* v0.10 · Datos fiscales y fotos de la remisión */
 .solo-compras { display: none !important; }
+body[data-rol="consulta"] .no-consulta { display: none !important; }
 body[data-rol="direccion"] .solo-compras, body[data-rol="admin"] .solo-compras, body[data-rol="compras"] .solo-compras { display: flex !important; }
 .psel--fa { height: 38px; gap: 8px; }
 .psel--fa .fa-l { font-size: 11.5px; font-weight: 700; opacity: .75; }
@@ -1786,3 +1788,14 @@ p.k-aviso.col-sec { margin: 0 0 12px; }
   .col-lin-c { grid-column: 1 / -1; }
   .col-acc { white-space: normal; }
 }
+
+/* Personas de contacto en el formulario del proveedor (2026-10-09) */
+.pc-ayuda { display: flex; gap: 8px; align-items: flex-start; padding: 10px 14px; border-radius: 14px; background: var(--lav); color: var(--navy); font-size: 12.5px; }
+.pc-ayuda .ico { width: 16px; height: 16px; flex: none; margin-top: 1px; }
+.pc-ya { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 6px; }
+.pc-ya li { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.pc-ya .ico { width: 16px; height: 16px; color: var(--blue); }
+.pc { margin: 10px 0; padding: 12px 14px 8px; border: 1.5px solid var(--line); border-radius: 18px; }
+.pc + .pc { margin-top: 12px; }
+.pc-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 13px; color: var(--navy); }
+.pc-h .ibtn { width: 30px; height: 30px; }

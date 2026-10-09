@@ -351,6 +351,13 @@
       const filas = ok(await sb().from('partidas').update({ aprobacion, motivo_rechazo: aprobacion === 'rechazada' ? str(motivo) : '' }).eq('id', id).select('id'));
       if (!filas.length) throw new Error('No tienes permiso para revisar este material.');
     },
+    // Aprobar varios de un jalón (botón "Aprobar todos")
+    async aprobarPartidas(ids) {
+      if (!ids.length) return 0;
+      const filas = ok(await sb().from('partidas').update({ aprobacion: 'aprobada', motivo_rechazo: '' }).in('id', ids).select('id'));
+      if (!filas.length) throw new Error('No tienes permiso para revisar estos materiales.');
+      return filas.length;
+    },
 
     /* Compras */
     async crearCompra(c) {

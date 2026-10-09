@@ -245,8 +245,10 @@
   const esCoord = () => esJefe() || rol() === 'coordinador';
   const esCompras = () => esJefe() || rol() === 'compras';
   const soloResidente = () => rol() === 'residente';
+  const esConsulta = () => rol() === 'consulta';   // iPad de la oficina: solo lectura y sin montos
   // Titular de la obra o suplente con la fecha de hoy dentro de su periodo
   const esResDe = id => {
+    if (rol() === 'consulta') return false;   // el iPad de consulta nunca captura, aunque lo asignen a una obra por error
     const o = obra(id); if (!o) return false;
     if (o.residenteId && o.residenteId === yoId()) return true;
     const h = today();
@@ -269,6 +271,9 @@
     el.addEventListener('click', e => { if (e.target.closest('a, button, input, select, label')) return; location.hash = el.dataset.href; });
     el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === el) location.hash = el.dataset.href; });
   });
+
+  // Rol de consulta: compras, pagos, caja chica y datos fiscales no se muestran (la base tampoco se los manda)
+  const sinAcceso = titulo => ({ title: titulo, html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">Sin acceso</h2><p class="muted">La cuenta de consulta no ve compras, pagos, caja chica ni datos fiscales.</p><a class="btn" href="#/obras"><span>Ir a obras</span>${api.ARR}</a></div></section>`, bind() { } });
 
   function sinDatos(titulo) {
     const txt = esJefe()
@@ -486,7 +491,7 @@
         ${aviso ? `<div class="note${r.estado === 'devuelta' ? '' : ' note--info'} rv" style="--d:120">${I[r.estado === 'devuelta' ? 'alert' : 'clip']}<p>${aviso}</p></div>` : ''}
 
         <section class="panel rv" style="--d:160">
-          <header class="panel-h"><h2>Materiales <span class="n">${n}</span></h2>${sel && s.autorizado ? '<span class="muted small">Selecciona los autorizados para registrar su cotización</span>' : ''}${s.rechazado ? `<span class="muted small">${s.rechazado} rechazado${s.rechazado > 1 ? 's' : ''}</span>` : ''}</header>
+          <header class="panel-h"><h2>Materiales <span class="n">${n}</span></h2>${revisando && pend ? `<button class="btn btn--sm rev-todos" type="button" data-aprobar-todos>${I.check}<span>Aprobar ${pend === n ? 'todos' : `los ${pend} pendientes`}</span></button>` : ''}${sel && s.autorizado ? '<span class="muted small">Selecciona los autorizados para registrar su cotización</span>' : ''}${s.rechazado ? `<span class="muted small">${s.rechazado} rechazado${s.rechazado > 1 ? 's' : ''}</span>` : ''}</header>
           <div class="panel-b panel-b--flush">
             <div class="tablewrap">
             <table class="tbl rtbl">
@@ -565,6 +570,13 @@
           if (!(await api.confirmar({ titulo: 'Terminar revisión', texto: `Quedan <b>${ap}</b> materiales aprobados y <b>${n - ap}</b> rechazados. Compras podrá cotizar los aprobados${ap ? ' y le llega un aviso' : ''}.${n - ap ? ' Al residente le llega un aviso con los rechazados y sus motivos.' : ''}`, ok: 'Terminar revisión' }))) return;
           if (await hacer(() => R.cambiarEstado(r.id, 'revisada'), 'Revisión terminada: compras ya puede cotizar.')) { api.rerender(); avisar(r.id, 'revisada'); }
         });
+        // Aprobar de un jalón los que siguen pendientes (los rechazados se quedan como están)
+        on('[data-aprobar-todos]', async () => {
+          const ids = r.partidas.filter(p => p.aprobacion === 'pendiente').map(p => p.id);
+          const rech = r.partidas.filter(p => p.aprobacion === 'rechazada').length;
+          if (!(await api.confirmar({ titulo: 'Aprobar materiales', texto: `Se aprobarán <b>${ids.length}</b> ${ids.length === 1 ? 'material pendiente' : 'materiales pendientes'}.${rech === 1 ? ' El rechazado se queda como está.' : rech ? ` Los ${rech} rechazados se quedan como están.` : ''} Después puedes cambiar cualquiera uno por uno antes de terminar la revisión.`, ok: 'Aprobar' }))) return;
+          if (await hacer(() => R.aprobarPartidas(ids), `${ids.length === 1 ? 'Material aprobado' : ids.length + ' materiales aprobados'}.`)) api.rerender();
+        });
         // Aprobar o rechazar material por material
         $$('[data-rev]', sec).forEach(b => b.addEventListener('click', async e => {
           e.stopPropagation();
@@ -631,6 +643,7 @@
      COMPRAS Y FACTURAS
      ========================================================= */
   async function pageCompras() {
+    if (esConsulta()) return sinAcceso('Compras y facturas');
     await api.refresh(); await cargar();
     if (!obrasMias().length && !D.compras.length) return sinDatos('Compras y facturas');
     const hw = hoyWk();
@@ -828,6 +841,7 @@
 
   /* ---------- Detalle de una compra ---------- */
   async function pageCompra({ id }) {
+    if (esConsulta()) return sinAcceso('Compra');
     await api.refresh(); await cargar();
     const c = compra(id);
     if (!c) return noEncontrado('Compra no encontrada', 'No existe, se borró o no tienes acceso a esa obra.', '#/compras', 'Compras y facturas');
@@ -1559,6 +1573,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   const conNombre = (cat, v) => { const k = String(v || '').trim().toUpperCase(); return cat[k] ? `${k} · ${cat[k]}` : String(v || '').trim(); };
 
   async function pageFiscal() {
+    if (esConsulta()) return sinAcceso('Datos fiscales');
     await api.refresh(); await cargar();
     const xs = fiscales(), puede = esCompras() && D.fiscalListo;
     const usos = id => D.compras.filter(c => (facturarA(c) || {}).id === id).length;
@@ -1675,7 +1690,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     const o = o0 ? obra(o0.id) : null;
     const nueva = !o, x = o || { nombre: '', clave: '', direccion: '', estatus: 'activa', residenteId: '', suplentes: [] };
     const jefe = esJefe(), dis = jefe ? '' : ' disabled';
-    const personas = N.perfiles().filter(p => p.activo).sort((a, b) => (a.nombre || a.correo).localeCompare(b.nombre || b.correo, 'es'));
+    const personas = N.perfiles().filter(p => p.activo && p.rol !== 'consulta').sort((a, b) => (a.nombre || a.correo).localeCompare(b.nombre || b.correo, 'es'));
     const residentes = personas.filter(p => p.rol === 'residente' || p.id === x.residenteId);
     const nom = p => esc(p.nombre || p.correo);
     const h = today();
@@ -1804,6 +1819,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   const KFILTROS = [['todos', 'Todos'], ['por_comprar', 'Por comprar'], ['por_aprobar', 'Por aprobar'], ['por_verificar', 'Por verificar'], ['verificado', 'Verificados'], ['reembolsado', 'Reembolsados']];
 
   async function pageCaja() {
+    if (esConsulta()) return sinAcceso('Caja chica');
     await api.refresh(); await cargar();
     if (!obrasMias().length) return sinDatos('Caja chica');
     // compras no ve gastos directos que el coordinador no ha aprobado (la base tampoco se los manda)

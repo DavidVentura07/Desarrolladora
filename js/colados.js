@@ -238,6 +238,7 @@
   const editaListas = () => esCoord() || rol() === 'compras';
   const obra = id => C.obras.find(o => o.id === id);
   const esResDe = id => {
+    if (rol() === 'consulta') return false;   // el iPad de consulta nunca captura, aunque lo asignen a una obra por error
     const o = obra(id); if (!o) return false;
     if (o.residenteId && o.residenteId === yoId()) return true;
     const h = today();
@@ -735,7 +736,7 @@
 
   /* ---------- Sección: solicitudes enviadas y cotización aprobada ---------- */
   function seccionCotizaciones(c) {
-    if (!['aprobada', 'realizado'].includes(c.estado)) return '';
+    if (!['aprobada', 'realizado'].includes(c.estado) || rol() === 'consulta') return '';   // consulta: sin precios (la base tampoco se los manda)
     if (!C.parte2) return esComprasR() ? `<section class="panel col-sec rv"><div class="panel-b"><p class="muted small">Para registrar cotizaciones falta correr <span class="mono">supabase/09-colados-cotizaciones.sql</span> en Supabase.</p></div></section>` : '';
     const el = elegidas(c), compras = comprasDe(c);
     // El residente solo ve con quién se compró; los precios los manejan compras, coordinación y jefes

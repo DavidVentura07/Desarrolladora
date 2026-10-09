@@ -15,7 +15,8 @@
     admin: 'Admin técnico',
     compras: 'Compras y adquisiciones',
     coordinador: 'Coordinador de obra',
-    residente: 'Residente de obra'
+    residente: 'Residente de obra',
+    consulta: 'Consulta (solo lectura)'
   };
   // Qué puede hacer cada rol en la interfaz (la base de datos lo vuelve a revisar)
   const PERMISOS = {
