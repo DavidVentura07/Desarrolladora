@@ -6,12 +6,16 @@
    - El residente de la obra (o su suplente vigente) la arma por semana, la guarda
      como borrador y la envía al coordinador cuando está seguro.
    - El coordinador la aprueba o la devuelve con un comentario; también la puede cancelar.
-   - Ya aprobada, compras pide cotizaciones a los proveedores de colado (correo con el PDF
-     por la Edge Function "cotizar-colado", WhatsApp con un clic o automático), captura lo
-     que cotiza cada uno, compara y elige: se crea la compra (concreto y, si es otro
-     proveedor, bombeo) que sigue en Compras y facturas (pago, factura, remisión por olla).
-   - Plazos del proveedor (confirmar, cancelar bomba, pago) y mínimos; compras marca
-     "confirmado"; al final se cierra con el volumen real (realizado).
+   - Una solicitud puede tener varios eventos (v0.12): el evento 1 vive en las columnas de
+     siempre (fecha, hora, elemento, ubicación, concretos) y los demás en eventos_extra;
+     todos salen en el mismo PDF.
+   - Ya aprobada, compras manda la solicitud a proveedores del directorio con la categoría
+     de concreto o bombeo (correo con el PDF por la Edge Function "cotizar-colado" y WhatsApp
+     con un clic) y registra solo la cotización que Dirección aprobó (v0.12: sin comparativo):
+     concreto y bombeo juntos, o cada uno por separado. Cada una crea su compra, que sigue en
+     Compras y facturas (pago, factura, remisión por olla).
+   - Compras marca "confirmado con el proveedor"; al final se cierra con el volumen real.
+   - El admin técnico corrige un colado en cualquier estado (v0.12).
    - Cada cambio de estado manda correo (Edge Function "aviso-colado").
    Los desplegables salen de colado_listas (cualquiera agrega opciones; jefes,
    coordinador y compras las quitan o renombran). Reglas en supabase/08-colados.sql.
@@ -83,14 +87,17 @@
   };
 
   /* ---------- Datos ---------- */
-  let C = { listo: false, colados: [], listas: {}, obras: [], compras: [], provs: [], cots: [], parte2: false };
+  let C = { listo: false, colados: [], listas: {}, obras: [], compras: [], cots: [], parte2: false, ev10: false };
   const quien = id => (id ? N.nombreDe(id) || 'Usuario' : '');
+  const deConcretos = ks => arr(ks).map(k => ({ volumen: num(k.volumen) || 0, fc: str(k.fc), clase: str(k.clase), edad: str(k.edad), tma: str(k.tma),
+    revenimiento: str(k.revenimiento), colocacion: str(k.colocacion), aditivos: arr(k.aditivos).map(str).filter(Boolean), nota: str(k.nota) }));
+  const deEvento = e => ({ fecha: e.fecha ? String(e.fecha).slice(0, 10) : '', hora: str(e.hora).slice(0, 5), elemento: str(e.elemento), ubicacion: str(e.ubicacion), concretos: deConcretos(e.concretos) });
   const deColado = c => ({
     id: c.id, obraId: c.obra_id, anio: c.anio, semana: c.semana, folio: str(c.folio), estado: c.estado,
     fecha: c.fecha ? String(c.fecha).slice(0, 10) : '', hora: str(c.hora).slice(0, 5), elemento: str(c.elemento), ubicacion: str(c.ubicacion),
-    concretos: arr(c.concretos).map(k => ({ volumen: num(k.volumen) || 0, fc: str(k.fc), clase: str(k.clase), edad: str(k.edad), tma: str(k.tma),
-      revenimiento: str(k.revenimiento), colocacion: str(k.colocacion), aditivos: arr(k.aditivos).map(str).filter(Boolean), nota: str(k.nota) })),
-    bombeo: c.bombeo || '', tuberiaM: c.tuberia_m, alturaM: c.altura_m, alcanceM: c.alcance_m, eventos: c.eventos, separacionMin: c.separacion_min,
+    concretos: deConcretos(c.concretos),
+    extra: arr(c.eventos_extra).map(deEvento),   // v0.12: eventos 2, 3…
+    bombeo: c.bombeo || '', tuberiaM: c.tuberia_m, alturaM: c.altura_m, alcanceM: c.alcance_m, separacionMin: c.separacion_min,
     contacto: str(c.contacto), contactoTel: str(c.contacto_tel), acceso: str(c.acceso), checklist: obj(c.checklist), notas: str(c.notas),
     comentario: str(c.comentario_revision),
     creadaPorId: c.creada_por || '', creadaPor: quien(c.creada_por), creadaEn: c.creada_en,
@@ -102,13 +109,7 @@
     volumenReal: c.volumen_real == null ? null : num(c.volumen_real), ollas: c.ollas == null ? null : c.ollas, notaReal: str(c.nota_real),
     realizadoPor: quien(c.realizado_por), realizadoEn: c.realizado_en || ''
   });
-  // v0.11: proveedor de colado (reglas) y cotización por proveedor
-  const deProv = x => ({
-    proveedorId: x.proveedor_id, tipos: arr(x.tipos), contactos: arr(x.contactos), correoExtra: str(x.correo_extra),
-    limiteConfirmar: str(x.limite_confirmar), limiteBomba: str(x.limite_cancelar_bomba), limitePago: str(x.limite_pago),
-    minimoM3: x.minimo_m3 == null ? null : num(x.minimo_m3), minimoBombeoM3: x.minimo_bombeo_m3 == null ? null : num(x.minimo_bombeo_m3),
-    tuberiaIncluida: x.tuberia_incluida_m == null ? null : num(x.tuberia_incluida_m), notas: str(x.notas), activo: x.activo !== false
-  });
+  // v0.11: cotización de un colado (v0.12: solo se registran las aprobadas)
   const deCot = q => ({
     id: q.id, coladoId: q.colado_id, proveedorId: q.proveedor_id || '', proveedor: obj(q.proveedor), tipo: q.tipo, estado: q.estado,
     envios: arr(q.envios), lineas: arr(q.lineas).map(l => ({ concepto: str(l.concepto), volumen: num(l.volumen) || 0, precio: num(l.precio) || 0 })),
@@ -116,12 +117,18 @@
     archivos: arr(q.archivos), compraIds: arr(q.compra_ids), solicitadaEn: q.solicitada_en, solicitadaPor: quien(q.solicitada_por),
     recibidaEn: q.recibida_en || '', recibidaPor: quien(q.recibida_por), elegidaEn: q.elegida_en || '', elegidaPor: quien(q.elegida_por)
   });
-  const total = c => c.concretos.reduce((a, k) => a + (k.volumen || 0), 0);
+  // Todos los eventos del colado (el 1 son las columnas de siempre)
+  const eventosDe = c => [{ fecha: c.fecha, hora: c.hora, elemento: c.elemento, ubicacion: c.ubicacion, concretos: c.concretos }, ...arr(c.extra)];
+  const volEv = e => e.concretos.reduce((a, k) => a + (k.volumen || 0), 0);
+  const total = c => eventosDe(c).reduce((a, e) => a + volEv(e), 0);
+  const nEv = c => 1 + arr(c.extra).length;
+  const concretosTodos = c => eventosDe(c).flatMap(e => e.concretos);
 
   function ok({ data, error }) {
     if (error) {
       const m = String(error.message || '');
       if (/colados_folio/.test(m)) throw new Error('Ese folio ya existe; vuelve a intentarlo.');
+      if (/eventos_extra/.test(m)) throw new Error('Para varios eventos falta correr supabase/10-colados-eventos.sql en Supabase.');
       throw new Error(N.traducir(error));
     }
     return data;
@@ -131,21 +138,20 @@
     const s0 = R.snapshot();
     const s = s0.obras.length && !fresco ? s0 : await R.cargar().catch(() => s0);
     C.obras = s.obras;
-    const [cs, ls, av, pv, qs] = await Promise.all([
+    const [cs, ls, av, qs] = await Promise.all([
       sb().from('colados').select('*').order('fecha', { ascending: false }),
       sb().from('colado_listas').select('clave, valores'),
       sb().from('avisos').select('*').not('colado_id', 'is', null).order('en', { ascending: false }).then(r => r, () => ({ data: [] })),
       // v0.11 (09-colados-cotizaciones.sql); sin correrlo, la parte 1 sigue funcionando
-      sb().from('colado_proveedores').select('*').then(r => r, e => ({ data: null, error: e })),
       sb().from('colado_cotizaciones').select('*').order('solicitada_en').then(r => r, e => ({ data: null, error: e }))
     ]);
     if (cs.error) { C.listo = false; C.colados = []; C.error = cs.error.message; return C; }
     C.listo = true; C.error = '';
     C.colados = cs.data.map(deColado);
+    C.ev10 = cs.data.some(r => 'eventos_extra' in r);   // v0.12: ¿ya se corrió 10-colados-eventos.sql?
     C.listas = {}; Object.keys(LISTAS).forEach(k => { C.listas[k] = []; });
     arr(ls.data).forEach(l => { C.listas[l.clave] = arr(l.valores); });
-    C.parte2 = !pv.error && !qs.error;
-    C.provs = C.parte2 ? arr(pv.data).map(deProv) : [];
+    C.parte2 = !qs.error;
     C.cots = C.parte2 ? arr(qs.data).map(deCot) : [];
     C.compras = R.snapshot().compras.filter(x => x.coladoId);
     arr(av.data).forEach(a => { const c = C.colados.find(x => x.id === a.colado_id); if (c) c.avisos.push({ evento: a.evento, en: a.en, para: arr(a.para) }); });
@@ -154,8 +160,10 @@
   const fila = c => ({
     anio: c.anio, semana: c.semana, folio: c.folio, fecha: c.fecha || null, hora: c.hora, elemento: str(c.elemento), ubicacion: str(c.ubicacion),
     concretos: c.concretos, bombeo: c.bombeo || '', tuberia_m: num(c.tuberiaM), altura_m: num(c.alturaM), alcance_m: num(c.alcanceM),
-    eventos: num(c.eventos) ? Math.round(num(c.eventos)) : null, separacion_min: num(c.separacionMin) != null ? Math.round(num(c.separacionMin)) : null,
-    contacto: str(c.contacto), contacto_tel: str(c.contactoTel), acceso: str(c.acceso), checklist: c.checklist || {}, notas: str(c.notas)
+    eventos: nEv(c), separacion_min: num(c.separacionMin) != null ? Math.round(num(c.separacionMin)) : null,
+    contacto: str(c.contacto), contacto_tel: str(c.contactoTel), acceso: str(c.acceso), checklist: c.checklist || {}, notas: str(c.notas),
+    // v0.12: solo se manda si hay eventos extra o la columna ya existe (así funciona aunque falte 10-colados-eventos.sql)
+    ...(arr(c.extra).length || C.ev10 ? { eventos_extra: arr(c.extra).map(e => ({ fecha: e.fecha || '', hora: e.hora || '', elemento: str(e.elemento), ubicacion: str(e.ubicacion), concretos: e.concretos })) } : {})
   });
   // Folio por obra y semana: EC469-C41-1, EC469-C41-2…
   const siguienteFolio = c => {
@@ -238,6 +246,7 @@
   const puedeEditar = id => esCoord() || esResDe(id);
   const obrasCaptura = () => C.obras.filter(o => o.estatus !== 'cerrada' && puedeEditar(o.id));
   const editable = c => puedeEditar(c.obraId) && ['borrador', 'devuelta'].includes(c.estado);
+  const esAdmin = () => rol() === 'admin';   // v0.12: el admin técnico corrige un colado en cualquier estado
 
   /* ---------- Página: lista por semana ---------- */
   const UI = Object.assign({ est: 'todos', obra: '' }, (() => { try { return JSON.parse(sessionStorage.getItem('galitha.col.ui')) || {}; } catch { return {}; } })());
@@ -271,10 +280,9 @@
       title: 'Programación de colados',
       html: `<section class="page">
         <header class="page-head rv"><div><p class="eyebrow">Concreto premezclado y bombeo, por obra y semana</p><h1 class="title">Programación de colados</h1></div>
-          <div class="col-hb">${esComprasR() && C.parte2 ? `<button class="tbtn" type="button" data-provs>${I.users}<span>Proveedores de colado</span></button>` : ''}${editaListas() ? `<button class="tbtn" type="button" data-listas>${I.listas || I.list}<span>Listas de opciones</span></button>` : ''}</div></header>
-        <div class="note note--info rv" style="--d:60">${I.colado}<p>${rol() === 'compras' ? 'Aquí aparecen los colados que el coordinador ya aprobó. Descarga el PDF para pedir las cotizaciones del concreto y del bombeo.'
+          <div class="col-hb">${editaListas() ? `<button class="tbtn" type="button" data-listas>${I.listas || I.list}<span>Listas de opciones</span></button>` : ''}</div></header>
+        <div class="note note--info rv" style="--d:60">${I.colado}<p>${rol() === 'compras' ? 'Aquí aparecen los colados que el coordinador ya aprobó. Manda la solicitud a los proveedores y registra la cotización que apruebe Dirección.'
           : 'El residente arma la solicitud y la guarda como <b>borrador</b>; cuando está seguro, la <b>envía al coordinador</b>, que la aprueba o la devuelve. Ya aprobada, compras pide las cotizaciones.'}</p></div>
-        ${esComprasR() && vis.some(urgente) ? `<div class="note note--bad rv" style="--d:70">${I.alert}<p><b>Plazos de proveedor por vencer:</b> ${vis.filter(urgente).map(c => `<a class="link-u" href="#/col/${esc(c.id)}">${esc(c.folio)}</a>`).join(', ')}. Confirma el pedido y libera el pago a tiempo para evitar cargos.</p></div>` : ''}
         ${proximos.length ? `<div class="col-prox rv" style="--d:80"><b>${I.cal}Próximos colados aprobados</b>${proximos.slice(0, 4).map(c => `<a href="#/col/${esc(c.id)}"><span>${esc(fDateL(c.fecha))}${c.hora ? ' · ' + esc(c.hora) : ''}</span><em>${esc((obra(c.obraId) || {}).nombre || '')} · ${esc(c.elemento || 'Colado')} · ${m3(total(c))}</em></a>`).join('')}</div>` : ''}
         <div class="filterbar rv" style="--d:100">
           <div class="seg" role="group" aria-label="Estado">${FILTROS.filter(([k]) => k === 'todos' || n(k) || UI.est === k).map(([k, l]) => `<button type="button" data-est="${k}" aria-pressed="${UI.est === k}">${l}${k !== 'todos' ? ` <b>${n(k)}</b>` : ''}</button>`).join('')}</div>
@@ -286,7 +294,6 @@
         $$('[data-est]', sec).forEach(b => b.addEventListener('click', () => { UI.est = b.dataset.est; saveUI(); api.rerender(); }));
         const so = $('[data-obra-f]', sec); if (so) so.addEventListener('change', () => { UI.obra = so.value; saveUI(); api.rerender(); });
         const bl = $('[data-listas]', sec); if (bl) bl.addEventListener('click', drListas);
-        const bp = $('[data-provs]', sec); if (bp) bp.addEventListener('click', drProveedores);
         $$('[data-href]', sec).forEach(el => {
           el.addEventListener('click', e => { if (e.target.closest('a, button')) return; location.hash = el.dataset.href; });
           el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === el) location.hash = el.dataset.href; });
@@ -297,11 +304,9 @@
   // v0.11: en qué va la compra de un colado aprobado
   function chipCot(c) {
     if (c.estado !== 'aprobada' || !C.parte2) return '';
-    const qs = cotsDe(c), el = elegidas(c);
-    if (urgente(c) && !soloResidente()) return `<span class="tagx tagx--bad">${I.alert}Plazo por vencer</span>`;
+    const el = elegidas(c);
     if (el.length) return `<span class="tagx tagx--ok">${esc(el.map(q => nombreProv(q.proveedorId, q)).join(' + '))}${c.confirmadoEn ? ' · confirmado' : ''}</span>`;
-    if (soloResidente()) return '';
-    return qs.length ? `<span class="tagx">${qs.length} ${qs.length === 1 ? 'cotización' : 'cotizaciones'}</span>` : '<span class="tagx tagx--wait">Sin cotizar</span>';
+    return soloResidente() ? '' : '<span class="tagx tagx--wait">Sin cotización aprobada</span>';
   }
   function tarjeta(c, d) {
     const o = obra(c.obraId) || {};
@@ -309,8 +314,8 @@
       <div class="col-dia"><b>${c.fecha ? toDate(c.fecha).getDate() : '—'}</b><small>${c.fecha ? DIA[toDate(c.fecha).getDay()].slice(0, 3) : 'sin fecha'}</small>${c.hora ? `<em>${esc(c.hora)}</em>` : ''}</div>
       <div class="col-main">
         <a class="pname" href="#/col/${esc(c.id)}">${esc(c.elemento || 'Colado sin elemento')}${c.ubicacion ? ' · ' + esc(c.ubicacion) : ''}</a>
-        <span class="sub">${esc(o.nombre || '')} · ${esc(c.folio)} · ${esc(BOMBEO[c.bombeo])}</span>
-        <p class="col-conc">${c.concretos.map(k => `<span>${esc([k.fc && "f'c " + k.fc, k.tma, k.revenimiento && 'rev. ' + k.revenimiento].filter(Boolean).join(' · ') || 'Concreto')} <b>${m3(k.volumen)}</b></span>`).join('') || '<span class="muted">Sin concretos todavía</span>'}</p>
+        <span class="sub">${esc(o.nombre || '')} · ${esc(c.folio)} · ${esc(BOMBEO[c.bombeo])}${nEv(c) > 1 ? ` · <b>${nEv(c)} eventos</b> (también ${c.extra.map(e => esc(fDate(e.fecha))).join(', ')})` : ''}</span>
+        <p class="col-conc">${concretosTodos(c).map(k => `<span>${esc([k.fc && "f'c " + k.fc, k.tma, k.revenimiento && 'rev. ' + k.revenimiento].filter(Boolean).join(' · ') || 'Concreto')} <b>${m3(k.volumen)}</b></span>`).join('') || '<span class="muted">Sin concretos todavía</span>'}</p>
         ${c.estado === 'devuelta' && c.comentario ? `<p class="k-rej">${I.alert}<span>${esc(c.comentario)}</span></p>` : ''}
       </div>
       <div class="col-side"><b>${m3(total(c))}</b>${tag(c)}${chipCot(c)}</div>
@@ -318,6 +323,7 @@
   }
 
   /* ---------- Detalle ---------- */
+  const listaK = k => `<li><b class="col-kv">${m3(k.volumen)}</b><div><div class="col-chips">${[k.fc && "f'c " + k.fc, k.clase && 'Clase ' + k.clase, k.edad, k.tma && 'TMA ' + k.tma, k.revenimiento && 'Rev. ' + k.revenimiento, k.colocacion, ...k.aditivos].filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('') || '<span class="muted">Sin especificar</span>'}</div>${k.nota ? `<small class="muted">${esc(k.nota)}</small>` : ''}</div></li>`;
   async function pageColado({ id }) {
     await cargar(true);
     if (!C.listo) return sinTabla();
@@ -329,8 +335,9 @@
     const acts = [
       ed ? `<button class="btn btn--solid" type="button" data-enviar>${I.send}<span>Enviar al coordinador</span></button>` : '',
       ed ? `<button class="btn" type="button" data-editar>${I.edit}<span>Editar</span></button>` : '',
+      !ed && esAdmin() ? `<button class="btn" type="button" data-corregir title="Corrección del admin técnico: no cambia el estado y queda en la bitácora">${I.edit}<span>Corregir</span></button>` : '',
       coord && c.estado === 'enviada' ? `<button class="btn btn--solid" type="button" data-aprobar>${I.check}<span>Aprobar</span></button><button class="btn" type="button" data-devolver>${I.undo}<span>Devolver para corregir</span></button>` : '',
-      esComprasR() && C.parte2 && c.estado === 'aprobada' ? `<button class="btn btn--solid" type="button" data-pedir>${I.send}<span>Pedir cotizaciones</span></button>` : '',
+      esComprasR() && C.parte2 && c.estado === 'aprobada' ? `<button class="btn${elegidas(c).length ? '' : ' btn--solid'}" type="button" data-pedir>${I.send}<span>Mandar solicitud a proveedores</span></button>` : '',
       puedeCerrar(c) ? `<button class="btn${esComprasR() ? '' : ' btn--solid'}" type="button" data-cerrar>${I.check}<span>Registrar colado realizado</span></button>` : '',
       `<button class="btn" type="button" data-pdf>${I.print}<span>PDF${['aprobada', 'realizado'].includes(c.estado) ? '' : ' (vista previa)'}</span></button>`,
       coord && ['enviada', 'aprobada'].includes(c.estado) ? `<button class="btn btn--danger" type="button" data-cancelar>${I.close}<span>Cancelar colado</span></button>` : '',
@@ -352,27 +359,28 @@
           <div class="d-title"><div class="d-tags">${tag(c)}<span class="tagx">${esc(c.folio)}</span></div>
             <h1 class="title title--d">${esc(c.elemento || 'Colado')}${c.ubicacion ? ' · ' + esc(c.ubicacion) : ''}</h1>
             <p class="d-sub"><span>${esc(o.nombre || '')}</span><span>Semana ${c.semana}</span><span>${esc(fDateL(c.fecha))}${c.hora ? ' · ' + esc(c.hora) + ' h' : ''}</span></p></div>
-          <div class="d-money"><div class="big-money">${m3(total(c))}</div><small>${c.concretos.length === 1 ? '1 concreto' : c.concretos.length + ' concretos'} · ${esc(BOMBEO[c.bombeo])}</small></div>
+          <div class="d-money"><div class="big-money">${m3(total(c))}</div><small>${nEv(c) > 1 ? nEv(c) + ' eventos' : concretosTodos(c).length === 1 ? '1 concreto' : concretosTodos(c).length + ' concretos'} · ${esc(BOMBEO[c.bombeo])}</small></div>
         </div></header>
         ${c.estado === 'devuelta' && c.comentario ? `<div class="note rv" style="--d:40">${I.undo}<p><b>${esc(c.devueltaPor || 'El coordinador')} lo devolvió para corregir:</b> ${esc(c.comentario)}</p></div>` : ''}
         ${c.estado === 'cancelada' ? `<div class="note note--bad rv" style="--d:40">${I.alert}<p><b>Colado cancelado por ${esc(c.canceladaPor)}.</b> ${esc(c.comentario)}</p></div>` : ''}
         <div class="c-acts rv" style="--d:50">${acts}</div>
-        ${ultimo ? `<p class="k-aviso rv">${I.mail}<span>Correo ${c.estado === 'enviada' ? 'al coordinador' : 'enviado'} · ${esc(ultimo.para.map(p => p.nombre || p.correo).join(', '))} · ${esc(fDateT(ultimo.en))}</span></p>` : ''}
+        ${ultimo ? `<p class="k-aviso col-sec rv">${I.mail}<span>Correo ${c.estado === 'enviada' ? 'al coordinador' : 'enviado'} · ${esc(ultimo.para.map(p => p.nombre || p.correo).join(', '))} · ${esc(fDateT(ultimo.en))}</span></p>` : ''}
         ${seccionCotizaciones(c)}
         <div class="d-grid">
           <div class="d-main">
-            <section class="panel rv" style="--d:80"><header class="panel-h"><h2>Concreto <span class="n">${c.concretos.length}</span></h2></header>
-              <div class="panel-b"><ul class="col-kl">${c.concretos.map(k => `<li><b class="col-kv">${m3(k.volumen)}</b><div><div class="col-chips">${[k.fc && "f'c " + k.fc, k.clase && 'Clase ' + k.clase, k.edad, k.tma && 'TMA ' + k.tma, k.revenimiento && 'Rev. ' + k.revenimiento, k.colocacion, ...k.aditivos].filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('') || '<span class="muted">Sin especificar</span>'}</div>${k.nota ? `<small class="muted">${esc(k.nota)}</small>` : ''}</div></li>`).join('') || '<li class="muted">Sin concretos todavía.</li>'}</ul>
-              ${c.concretos.length > 1 ? `<p class="col-tot">Total <b>${m3(total(c))}</b></p>` : ''}</div>
+            <section class="panel rv" style="--d:80"><header class="panel-h"><h2>${nEv(c) > 1 ? 'Eventos' : 'Concreto'} <span class="n">${nEv(c) > 1 ? nEv(c) : c.concretos.length}</span></h2></header>
+              <div class="panel-b">${eventosDe(c).map((e, i) => `${nEv(c) > 1 ? `<p class="col-ev-t"><b>Evento ${i + 1} · ${esc(fDateL(e.fecha))}${e.hora ? ' · ' + esc(e.hora) + ' h' : ''}</b><span>${esc([e.elemento, e.ubicacion].filter(Boolean).join(' · '))} · ${m3(volEv(e))}</span></p>` : ''}
+                <ul class="col-kl">${e.concretos.map(listaK).join('') || '<li class="muted">Sin concretos todavía.</li>'}</ul>`).join('')}
+              ${concretosTodos(c).length > 1 ? `<p class="col-tot">Total <b>${m3(total(c))}</b></p>` : ''}</div>
             </section>
             <section class="panel rv" style="--d:120"><header class="panel-h"><h2>Bombeo y logística</h2></header><div class="panel-b">
               ${dl([['Bombeo', esc(BOMBEO[c.bombeo])], ['Tubería', c.tuberiaM != null ? esc(c.tuberiaM) + ' m' : ''], ['Alcance de la pluma', c.alcanceM != null ? esc(c.alcanceM) + ' m' : ''],
-                ['Altura a bombear', c.alturaM != null ? esc(c.alturaM) + ' m' : ''], ['Eventos', c.eventos != null ? esc(c.eventos) : ''], ['Separación entre ollas', c.separacionMin != null ? esc(c.separacionMin) + ' min' : ''],
+                ['Altura a bombear', c.alturaM != null ? esc(c.alturaM) + ' m' : ''], ['Separación entre ollas', c.separacionMin != null ? esc(c.separacionMin) + ' min' : ''],
                 ['Recibe en obra', esc([c.contacto, c.contactoTel].filter(Boolean).join(' · '))], ['Dirección', esc(o.direccion || '')], ['Acceso y referencias', esc(c.acceso)], ['Notas', esc(c.notas)]])}
             </div></section>
           </div>
           <aside class="d-side">
-            ${seccionPlazos(c)}
+            ${seccionConfirmacion(c)}
             ${seccionCierre(c)}
             <section class="panel rv" style="--d:140"><header class="panel-h"><h2>Obra lista</h2></header><div class="panel-b">
               <ul class="checks">${CHECK.map(([k, t]) => `<li class="${c.checklist[k] ? 'ok' : 'meh'}">${I[c.checklist[k] ? 'okc' : 'clock']}<span>${esc(t)}</span></li>`).join('')}</ul>
@@ -384,6 +392,7 @@
       bind(sec) {
         const on = (sel, fn) => { const b = $(sel, sec); if (b) b.addEventListener('click', fn); };
         on('[data-editar]', () => drColado(c));
+        on('[data-corregir]', () => drColado(c, { correccion: true }));
         on('[data-pdf]', () => imprimir(c));
         on('[data-enviar]', async () => {
           const falta = faltantes(c);
@@ -421,8 +430,12 @@
     };
   }
   // Lo mínimo para enviar (la base revisa fecha y volúmenes)
-  const faltantes = c => [!c.fecha && 'la fecha', !c.elemento && 'el elemento a colar', !c.concretos.length && 'el concreto',
-    c.concretos.some(k => !(k.volumen > 0)) && 'el volumen de cada concreto', c.concretos.some(k => !k.fc) && "la resistencia (f'c)", !c.bombeo && 'el tipo de bombeo'].filter(Boolean);
+  const faltantes = c => {
+    const evs = eventosDe(c), en = (i, t) => (evs.length > 1 ? `${t} del evento ${i + 1}` : t);
+    return [...evs.flatMap((e, i) => [!e.fecha && en(i, 'la fecha'), !e.elemento && en(i, 'el elemento a colar'), !e.concretos.length && en(i, 'el concreto'),
+      e.concretos.some(k => !(k.volumen > 0)) && en(i, 'el volumen de cada concreto'), e.concretos.some(k => !k.fc) && en(i, "la resistencia (f'c)")]),
+      !c.bombeo && 'el tipo de bombeo'].filter(Boolean);
+  };
 
   /* ---------- Formulario ---------- */
   // Desplegable con opciones de la lista + valor actual + "Agregar opción…"
@@ -447,35 +460,44 @@
   const chipsAditivos = sel => [...new Set([...(C.listas.aditivos || []), ...sel])].map(v => `<label class="chk chk--pill"><input type="checkbox" value="${esc(v)}"${sel.includes(v) ? ' checked' : ''}><span>${esc(v)}</span></label>`).join('')
     + `<button type="button" class="tbtn tbtn--sm" data-add-aditivo>${I.plus}<span>Agregar</span></button>`;
 
-  async function drColado(c0) {
+  // v0.12: un bloque por evento (fecha, hora, elemento, ubicación y sus concretos)
+  const KVACIO = () => ({ volumen: 0, fc: '', clase: '1', edad: '', tma: '', revenimiento: '', colocacion: 'Bombeable', aditivos: [], nota: '' });
+  const bloqueEvento = (e, i) => `<div class="col-ev" data-ev>
+    <div class="col-ev-h"><b data-evt>${i ? 'Evento ' + (i + 1) : 'Evento 1'}</b>${i ? `<button type="button" class="tbtn tbtn--sm" data-quitar-ev>${I.trash}<span>Quitar este evento</span></button>` : ''}</div>
+    <div class="grid2">
+      <label class="fld"><span class="fld-l">Fecha <em>*</em></span><input class="in" name="fecha" type="date" value="${esc(e.fecha || '')}">${i ? '' : '<span class="fld-h" data-sem></span>'}</label>
+      <label class="fld"><span class="fld-l">Hora de inicio</span><input class="in" name="hora" type="time" value="${esc(e.hora || '')}"></label>
+      <label class="fld"><span class="fld-l">Elemento a colar <em>*</em></span>${selLista('elementos', 'elemento', e.elemento)}</label>
+      <label class="fld"><span class="fld-l">Nivel, ejes o zona</span><input class="in" name="ubicacion" value="${esc(e.ubicacion || '')}" placeholder="Ej. Nivel 3, ejes A-D / 1-4"></label>
+    </div>
+    <div data-concretos>${(e.concretos.length ? e.concretos : [KVACIO()]).map(bloqueConcreto).join('')}</div>
+    <button type="button" class="btn btn--sm" data-add-k>${I.plus}<span>Agregar otro concreto</span></button>
+  </div>`;
+
+  async function drColado(c0, { correccion = false } = {}) {
     await cargar();
     if (!C.listo) { toast('Falta correr 08-colados.sql en Supabase.'); return; }
+    if (correccion && !(c0 && esAdmin())) { toast('Solo el admin técnico corrige colados ya enviados.'); return; }
     const nuevo = !c0;
     const obras = nuevo ? obrasCaptura() : [obra(c0.obraId)].filter(Boolean);
     if (!obras.length) { toast('Solo el residente de una obra (o el coordinador) capturan colados.'); return; }
     const o0 = obras[0], res = (o0 && o0.residente) || {};
-    const c = c0 ? JSON.parse(JSON.stringify(c0)) : { obraId: o0.id, fecha: '', hora: '07:00', elemento: '', ubicacion: '', concretos: [{ volumen: 0, fc: '', clase: '1', edad: '', tma: '', revenimiento: '', colocacion: 'Bombeable', aditivos: [], nota: '' }],
-      bombeo: '', tuberiaM: null, alturaM: null, alcanceM: null, eventos: 1, separacionMin: null, contacto: res.nombre || '', contactoTel: res.telefono || '', acceso: '', checklist: {}, notas: '' };
+    const c = c0 ? JSON.parse(JSON.stringify(c0)) : { obraId: o0.id, fecha: '', hora: '07:00', elemento: '', ubicacion: '', concretos: [KVACIO()], extra: [],
+      bombeo: '', tuberiaM: null, alturaM: null, alcanceM: null, separacionMin: null, contacto: res.nombre || '', contactoTel: res.telefono || '', acceso: '', checklist: {}, notas: '' };
     const v = x => (x == null ? '' : esc(x));
     api.openPanel(`<form class="dr-form" novalidate>
-      <header class="dr-h"><div><p class="mono">Programación de colados${c0 ? ' · ' + esc(c0.folio) : ''}</p><h2 id="dr-title">${nuevo ? 'Nuevo colado' : 'Editar colado'}</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
+      <header class="dr-h"><div><p class="mono">Programación de colados${c0 ? ' · ' + esc(c0.folio) : ''}</p><h2 id="dr-title">${nuevo ? 'Nuevo colado' : correccion ? 'Corregir colado' : 'Editar colado'}</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
       <div class="dr-b">
+        ${correccion ? `<div class="note note--info">${I.edit}<p>Corrección del admin técnico: el colado se queda <b>${esc((ESTADOS[c0.estado] || {}).label || '')}</b>, no se manda aviso y el cambio queda en la bitácora.${c0.estado === 'aprobada' && elegidas(c0).length ? ' Ya tiene cotización registrada: si cambias volúmenes o fechas, revisa la compra.' : ''}</p></div>` : ''}
         ${c0 && c0.estado === 'devuelta' && c0.comentario ? `<div class="note">${I.undo}<p><b>Qué hay que corregir:</b> ${esc(c0.comentario)}</p></div>` : ''}
-        <fieldset class="fs"><legend><span class="mono">1</span>Qué y cuándo</legend><div class="fs-b"><div class="grid2">
-          <label class="fld fld--wide"><span class="fld-l">Obra</span><select class="in" name="obra"${nuevo && obras.length > 1 ? '' : ' disabled'}>${obras.map(o => `<option value="${esc(o.id)}"${o.id === c.obraId ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>
-          <label class="fld"><span class="fld-l">Fecha del colado <em>*</em></span><input class="in" name="fecha" type="date" value="${v(c.fecha)}"><span class="fld-h" data-sem></span></label>
-          <label class="fld"><span class="fld-l">Hora de inicio</span><input class="in" name="hora" type="time" value="${v(c.hora)}"></label>
-          <label class="fld"><span class="fld-l">Elemento a colar <em>*</em></span>${selLista('elementos', 'elemento', c.elemento)}</label>
-          <label class="fld"><span class="fld-l">Nivel, ejes o zona</span><input class="in" name="ubicacion" value="${v(c.ubicacion)}" placeholder="Ej. Nivel 3, ejes A-D / 1-4"></label>
-          <label class="fld"><span class="fld-l">Número de eventos</span><input class="in" name="eventos" type="number" min="1" step="1" value="${v(c.eventos)}"><span class="fld-h">Cuántos colados (entregas) en este pedido.</span></label>
+        <fieldset class="fs"><legend><span class="mono">1</span>Qué y cuándo</legend><div class="fs-b">
+          <label class="fld"><span class="fld-l">Obra</span><select class="in" name="obra"${nuevo && obras.length > 1 ? '' : ' disabled'}>${obras.map(o => `<option value="${esc(o.id)}"${o.id === c.obraId ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>
+          <div data-eventos>${eventosDe(c).map(bloqueEvento).join('')}</div>
+          <button type="button" class="btn btn--sm" data-add-ev>${I.plus}<span>Agregar otro evento</span></button>
+          <p class="fld-h">Si el colado se hace en varios días o etapas, agrega un evento por cada uno: todos salen en la misma solicitud para el proveedor. Si un evento lleva concretos distintos (por ejemplo, grava de 20 mm para la losa y de 10 mm para columnas), agrega uno por cada tipo. <b data-total></b></p>
           <label class="fld"><span class="fld-l">Separación entre ollas (min)</span><input class="in" name="separacion" type="number" min="0" step="5" value="${v(c.separacionMin)}"><span class="fld-h">El proveedor da 30 min de muestreo + 10 de descarga.</span></label>
-        </div></div></fieldset>
-        <fieldset class="fs"><legend><span class="mono">2</span>Concreto</legend><div class="fs-b">
-          <div data-concretos>${c.concretos.map(bloqueConcreto).join('')}</div>
-          <button type="button" class="btn btn--sm" data-add-k>${I.plus}<span>Agregar otro concreto</span></button>
-          <p class="fld-h">Si el colado lleva concretos distintos (por ejemplo, grava de 20 mm para la losa y de 10 mm para columnas), agrega uno por cada tipo. <b data-total></b></p>
         </div></fieldset>
-        <fieldset class="fs"><legend><span class="mono">3</span>Bombeo</legend><div class="fs-b">
+        <fieldset class="fs"><legend><span class="mono">2</span>Bombeo</legend><div class="fs-b">
           <div class="toggles">${Object.entries(BOMBEO).filter(([k]) => k).map(([k, l]) => `<label class="chk chk--pill"><input type="radio" name="bombeo" value="${k}"${c.bombeo === k ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>
           <div class="grid2 grid3" style="margin-top:12px">
             <label class="fld" data-b="estacionaria"><span class="fld-l">Tubería (m)</span><input class="in" name="tuberia" type="number" min="0" step="1" value="${v(c.tuberiaM)}"><span class="fld-h">Horizontal más vertical.</span></label>
@@ -483,7 +505,7 @@
             <label class="fld" data-b="estacionaria pluma"><span class="fld-l">Altura a bombear (m)</span><input class="in" name="altura" type="number" min="0" step="0.5" value="${v(c.alturaM)}"></label>
           </div>
         </div></fieldset>
-        <fieldset class="fs"><legend><span class="mono">4</span>En obra</legend><div class="fs-b"><div class="grid2">
+        <fieldset class="fs"><legend><span class="mono">3</span>En obra</legend><div class="fs-b"><div class="grid2">
           <label class="fld"><span class="fld-l">Quién recibe</span><input class="in" name="contacto" value="${v(c.contacto)}"></label>
           <label class="fld"><span class="fld-l">Teléfono</span><input class="in" name="tel" type="tel" value="${v(c.contactoTel)}"></label>
           <label class="fld fld--wide"><span class="fld-l">Acceso y referencias</span><textarea class="in" name="acceso" rows="2" placeholder="Descarga en calle o banqueta, cables cerca, pendiente, horario de la calle…">${v(c.acceso)}</textarea></label>
@@ -491,19 +513,29 @@
           <label class="fld fld--wide"><span class="fld-l">Notas</span><textarea class="in" name="notas" rows="2">${v(c.notas)}</textarea></label>
         </div></div></fieldset>
       </div>
-      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-borrador>${I.draft}<span>Guardar borrador</span></button><button type="submit" class="btn btn--solid" data-ok>${I.send}<span>Guardar y enviar</span></button></footer>
+      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p>${correccion
+        ? `<button type="button" class="btn" data-close><span>Cancelar</span></button><button type="submit" class="btn btn--solid" data-ok>${I.check}<span>Guardar corrección</span></button>`
+        : `<button type="button" class="btn" data-borrador>${I.draft}<span>Guardar borrador</span></button><button type="submit" class="btn btn--solid" data-ok>${I.send}<span>Guardar y enviar</span></button>`}</footer>
     </form>`, { wide: true }, panel => {
-      const f = $('form', panel), err = $('[data-err]', panel), cont = $('[data-concretos]', panel);
+      const f = $('form', panel), err = $('[data-err]', panel), evs = $('[data-eventos]', panel);
       f.addEventListener('input', api.markDirty);
-      const semana = () => { const d = toDate(f.fecha.value) || new Date(); return isoWeek(d); };
+      const bloques = () => $$('[data-ev]', evs);
+      const fecha1 = () => $('[name=fecha]', bloques()[0]).value;
+      const semana = () => isoWeek(toDate(fecha1()) || new Date());
       const pintarSem = () => { const w = semana(); $('[data-sem]', panel).textContent = `Semana ${w.semana} · ${wkRange(w)}`; };
-      const renum = () => $$('[data-kn]', panel).forEach((s, i) => { s.textContent = i + 1; });
-      const leerK = () => $$('[data-k]', cont).map(b => ({
-        volumen: num($('[name=volumen]', b).value) || 0, fc: $('[name=fc]', b).value, clase: $('[name=clase]', b).value, edad: $('[name=edad]', b).value,
-        tma: $('[name=tma]', b).value, revenimiento: $('[name=rev]', b).value, colocacion: $('[name=colocacion]', b).value,
-        aditivos: $$('[data-aditivos] input:checked', b).map(i => i.value), nota: $('[name=knota]', b).value.trim()
+      const leerK = b => $$('[data-k]', $('[data-concretos]', b)).map(k => ({
+        volumen: num($('[name=volumen]', k).value) || 0, fc: $('[name=fc]', k).value, clase: $('[name=clase]', k).value, edad: $('[name=edad]', k).value,
+        tma: $('[name=tma]', k).value, revenimiento: $('[name=rev]', k).value, colocacion: $('[name=colocacion]', k).value,
+        aditivos: $$('[data-aditivos] input:checked', k).map(i => i.value), nota: $('[name=knota]', k).value.trim()
       }));
-      const pintarTotal = () => { const t = leerK().reduce((a, k) => a + k.volumen, 0); $('[data-total]', panel).textContent = t ? `Total: ${m3(t)}.` : ''; };
+      const sinNueva = x => (x === '__nueva' ? '' : x);
+      const leerEv = b => ({ fecha: $('[name=fecha]', b).value, hora: $('[name=hora]', b).value, elemento: sinNueva($('[name=elemento]', b).value),
+        ubicacion: $('[name=ubicacion]', b).value.trim(), concretos: leerK(b).map(k => Object.assign(k, { fc: sinNueva(k.fc), edad: sinNueva(k.edad), tma: sinNueva(k.tma), revenimiento: sinNueva(k.revenimiento) })) });
+      const renum = () => bloques().forEach((b, i) => { $('[data-evt]', b).textContent = 'Evento ' + (i + 1); $$('[data-kn]', b).forEach((s0, j) => { s0.textContent = j + 1; }); });
+      const pintarTotal = () => {
+        const xs = bloques().map(leerEv), t = xs.reduce((a, e) => a + volEv(e), 0);
+        $('[data-total]', panel).textContent = t ? `Total: ${m3(t)}${xs.length > 1 ? ` en ${xs.length} eventos` : ''}.` : '';
+      };
       const bombeoVis = () => { const b = (f.querySelector('[name=bombeo]:checked') || {}).value || ''; $$('[data-b]', panel).forEach(el => { el.hidden = !el.dataset.b.split(' ').includes(b); }); };
       pintarSem(); pintarTotal(); bombeoVis();
       // Al cambiar de obra (captura nueva), propone al residente de esa obra como quien recibe
@@ -512,12 +544,12 @@
         if (!f.contacto.value.trim() || f.contacto.value.trim() === (r0.nombre || '')) { f.contacto.value = r1.nombre || ''; f.tel.value = r1.telefono || ''; }
         c.obraId = f.obra.value;
       });
-      f.fecha.addEventListener('change', pintarSem);
       f.addEventListener('change', e => {
         if (e.target.name === 'bombeo') bombeoVis();
+        if (e.target.name === 'fecha' && bloques()[0].contains(e.target)) pintarSem();
         if (e.target.name === 'volumen') pintarTotal();
       });
-      cont.addEventListener('input', e => { if (e.target.name === 'volumen') pintarTotal(); });
+      evs.addEventListener('input', e => { if (e.target.name === 'volumen') pintarTotal(); });
       // "＋ Agregar opción…" en cualquier desplegable de lista
       panel.addEventListener('change', async e => {
         const s = e.target.closest('select[data-lista]'); if (!s || s.value !== '__nueva') return;
@@ -532,11 +564,22 @@
         toast(`"${val}" agregado a la lista.`);
       });
       panel.addEventListener('click', async e => {
+        const qe = e.target.closest('[data-quitar-ev]');
+        if (qe) { qe.closest('[data-ev]').remove(); renum(); pintarTotal(); api.markDirty(); return; }
+        if (e.target.closest('[data-add-ev]')) {
+          // El nuevo evento copia las características del anterior (sin fecha ni volúmenes)
+          const prev = leerEv(bloques().pop());
+          evs.insertAdjacentHTML('beforeend', bloqueEvento({ fecha: '', hora: prev.hora, elemento: '', ubicacion: '', concretos: prev.concretos.map(k => Object.assign({}, k, { volumen: 0 })) }, bloques().length));
+          renum(); api.markDirty();
+          $('[name=fecha]', bloques().pop()).focus();
+          return;
+        }
         const q = e.target.closest('[data-quitar-k]');
-        if (q) { if ($$('[data-k]', cont).length > 1) { q.closest('[data-k]').remove(); renum(); pintarTotal(); api.markDirty(); } else toast('El colado necesita al menos un concreto.'); return; }
-        if (e.target.closest('[data-add-k]')) {
-          const prev = leerK().pop() || {};
-          cont.insertAdjacentHTML('beforeend', bloqueConcreto(Object.assign({}, prev, { volumen: 0, nota: '', aditivos: prev.aditivos || [] }), $$('[data-k]', cont).length));
+        if (q) { const box = q.closest('[data-concretos]'); if ($$('[data-k]', box).length > 1) { q.closest('[data-k]').remove(); renum(); pintarTotal(); api.markDirty(); } else toast('Cada evento necesita al menos un concreto.'); return; }
+        const ak = e.target.closest('[data-add-k]');
+        if (ak) {
+          const b = ak.closest('[data-ev]'), prev = leerK(b).pop() || KVACIO();
+          $('[data-concretos]', b).insertAdjacentHTML('beforeend', bloqueConcreto(Object.assign({}, prev, { volumen: 0, nota: '', aditivos: prev.aditivos || [] }), $$('[data-k]', b).length));
           renum(); api.markDirty(); return;
         }
         const ad = e.target.closest('[data-add-aditivo]');
@@ -555,22 +598,21 @@
       const guardarYa = async enviar => {
         err.textContent = '';
         const w = semana();
-        const g = Object.assign({}, c, {
-          obraId: nuevo ? f.obra.value : c.obraId, anio: w.anio, semana: w.semana, fecha: f.fecha.value, hora: f.hora.value,
-          elemento: f.elemento.value === '__nueva' ? '' : f.elemento.value, ubicacion: f.ubicacion.value.trim(),
-          eventos: f.eventos.value, separacionMin: f.separacion.value, concretos: leerK().map(k => Object.assign(k, { fc: k.fc === '__nueva' ? '' : k.fc })),
+        const [e1, ...extra] = bloques().map(leerEv);
+        const g = Object.assign({}, c, e1, {
+          obraId: nuevo ? f.obra.value : c.obraId, anio: w.anio, semana: w.semana, extra, separacionMin: f.separacion.value,
           bombeo: (f.querySelector('[name=bombeo]:checked') || {}).value || '', tuberiaM: f.tuberia.value, alcanceM: f.alcance.value, alturaM: f.altura.value,
           contacto: f.contacto.value.trim(), contactoTel: f.tel.value.trim(), acceso: f.acceso.value.trim(), notas: f.notas.value.trim(),
           checklist: Object.fromEntries($$('[name=ck]', f).map(i => [i.value, i.checked]))
         });
-        ['edad', 'tma', 'revenimiento'].forEach(k => g.concretos.forEach(x => { if (x[k] === '__nueva') x[k] = ''; }));
         if (g.bombeo !== 'estacionaria') g.tuberiaM = null;
         if (g.bombeo !== 'pluma') g.alcanceM = null;
         if (!['estacionaria', 'pluma'].includes(g.bombeo)) g.alturaM = null;
-        if (enviar) {
+        if (extra.length && !C.ev10 && !(await api.confirmar({ titulo: 'Varios eventos', texto: 'Para guardar varios eventos hay que haber corrido <span class="mono">supabase/10-colados-eventos.sql</span> en Supabase. ¿Intentarlo de todos modos?', ok: 'Intentar' }))) return;
+        if (enviar || (correccion && c0.estado !== 'borrador')) {
           const falta = faltantes(g);
-          if (falta.length) { err.textContent = 'Para enviar falta: ' + falta.join(', ') + '. Puedes guardarlo como borrador.'; return; }
-          if (g.fecha < today() && !(await api.confirmar({ titulo: 'Fecha pasada', texto: `La fecha del colado (${esc(fDateL(g.fecha))}) ya pasó. ¿Enviarlo de todos modos?`, ok: 'Enviar' }))) return;
+          if (falta.length) { err.textContent = (correccion ? 'Falta: ' : 'Para enviar falta: ') + falta.join(', ') + (correccion ? '.' : '. Puedes guardarlo como borrador.'); return; }
+          if (enviar && g.fecha < today() && !(await api.confirmar({ titulo: 'Fecha pasada', texto: `La fecha del colado (${esc(fDateL(g.fecha))}) ya pasó. ¿Enviarlo de todos modos?`, ok: 'Enviar' }))) return;
         }
         $$('.dr-f .btn', panel).forEach(b => { b.disabled = true; });
         let id;
@@ -585,12 +627,12 @@
         }
         await cargar();
         api.closeDrawer(true);
-        toast(enviar ? 'Colado enviado al coordinador.' : 'Borrador guardado. Envíalo cuando estés seguro.');
+        toast(correccion ? 'Corrección guardada.' : enviar ? 'Colado enviado al coordinador.' : 'Borrador guardado. Envíalo cuando estés seguro.');
         if (location.hash === '#/col/' + id) api.rerender(); else location.hash = '#/col/' + id;
         if (enviar) avisar(id, 'enviada');
       };
-      $('[data-borrador]', panel).addEventListener('click', () => guardarYa(false));
-      f.addEventListener('submit', e => { e.preventDefault(); guardarYa(true); });
+      const bb = $('[data-borrador]', panel); if (bb) bb.addEventListener('click', () => guardarYa(false));
+      f.addEventListener('submit', e => { e.preventDefault(); guardarYa(!correccion); });
     });
   }
 
@@ -623,7 +665,7 @@
 
   /* ---------- PDF: solicitud de colado (para pedir cotizaciones) ---------- */
   function imprimir(c) {
-    const o = obra(c.obraId) || {};
+    const o = obra(c.obraId) || {}, evs = eventosDe(c);
     const fila = (t, v) => (v ? `<tr><th>${t}</th><td>${v}</td></tr>` : '');
     $('#print').innerHTML = `<div class="pf pf--col">
       ${c.estado === 'aprobada' ? '' : `<div class="pf-marca">${esc((ESTADOS[c.estado] || {}).label || '').toUpperCase()} · NO ENVIAR</div>`}
@@ -631,15 +673,15 @@
         <p><span>FOLIO: ${esc(c.folio)}</span><span>SEMANA: ${c.semana}</span></p></div></div>
       <table class="pf-kv">
         ${fila('OBRA', esc(o.nombre || ''))}${fila('DIRECCIÓN', esc(o.direccion || ''))}
-        ${fila('FECHA Y HORA', esc(fDateL(c.fecha).toUpperCase()) + (c.hora ? ' · ' + esc(c.hora) + ' H' : ''))}
-        ${fila('ELEMENTO', esc([c.elemento, c.ubicacion].filter(Boolean).join(' · ')))}
-        ${fila('EVENTOS', c.eventos != null ? esc(c.eventos) : '')}${fila('SEPARACIÓN ENTRE OLLAS', c.separacionMin != null ? esc(c.separacionMin) + ' MIN' : '')}
+        ${evs.length > 1 ? fila('EVENTOS', evs.length + ' · VOLUMEN TOTAL ' + m3(total(c)).toUpperCase()) : fila('FECHA Y HORA', esc(fDateL(c.fecha).toUpperCase()) + (c.hora ? ' · ' + esc(c.hora) + ' H' : '')) + fila('ELEMENTO', esc([c.elemento, c.ubicacion].filter(Boolean).join(' · ')))}
+        ${fila('SEPARACIÓN ENTRE OLLAS', c.separacionMin != null ? esc(c.separacionMin) + ' MIN' : '')}
       </table>
+      ${evs.map((e, n) => `${evs.length > 1 ? `<p class="pf-ev"><b>EVENTO ${n + 1} · ${esc(fDateL(e.fecha).toUpperCase())}${e.hora ? ' · ' + esc(e.hora) + ' H' : ''}</b>${[e.elemento, e.ubicacion].filter(Boolean).length ? ' · ' + esc([e.elemento, e.ubicacion].filter(Boolean).join(' · ')) : ''}</p>` : ''}
       <table><colgroup><col style="width:4%"><col style="width:10%"><col style="width:12%"><col style="width:8%"><col style="width:14%"><col style="width:9%"><col style="width:12%"><col style="width:11%"><col style="width:20%"></colgroup>
         <thead><tr><th>#</th><th>VOLUMEN</th><th>F'C</th><th>CLASE</th><th>EDAD</th><th>TMA</th><th>REVENIMIENTO</th><th>COLOCACIÓN</th><th>ADITIVOS / NOTAS</th></tr></thead>
-        <tbody>${c.concretos.map((k, i) => `<tr><td>${i + 1}</td><td>${m3(k.volumen)}</td><td>${esc(k.fc)}</td><td>${esc(k.clase)}</td><td>${esc(k.edad)}</td><td>${esc(k.tma)}</td><td>${esc(k.revenimiento)}</td><td>${esc(k.colocacion)}</td><td class="l">${esc([k.aditivos.join(', '), k.nota].filter(Boolean).join(' · '))}</td></tr>`).join('')}</tbody>
-        <tfoot><tr class="tt"><td></td><td>${m3(total(c))}</td><td colspan="7" class="l">VOLUMEN TOTAL</td></tr></tfoot>
-      </table>
+        <tbody>${e.concretos.map((k, i) => `<tr><td>${i + 1}</td><td>${m3(k.volumen)}</td><td>${esc(k.fc)}</td><td>${esc(k.clase)}</td><td>${esc(k.edad)}</td><td>${esc(k.tma)}</td><td>${esc(k.revenimiento)}</td><td>${esc(k.colocacion)}</td><td class="l">${esc([k.aditivos.join(', '), k.nota].filter(Boolean).join(' · '))}</td></tr>`).join('')}</tbody>
+        <tfoot><tr class="tt"><td></td><td>${m3(volEv(e))}</td><td colspan="7" class="l">${evs.length > 1 ? 'VOLUMEN DEL EVENTO ' + (n + 1) : 'VOLUMEN TOTAL'}</td></tr></tfoot>
+      </table>`).join('')}
       <table class="pf-kv">
         ${fila('BOMBEO', esc(BOMBEO[c.bombeo].toUpperCase()))}${fila('TUBERÍA', c.tuberiaM != null ? esc(c.tuberiaM) + ' M' : '')}
         ${fila('ALCANCE DE PLUMA', c.alcanceM != null ? esc(c.alcanceM) + ' M' : '')}${fila('ALTURA A BOMBEAR', c.alturaM != null ? esc(c.alturaM) + ' M' : '')}
@@ -656,32 +698,31 @@
   }
 
   /* =========================================================
-     PARTES 2 Y 3 (v0.11): proveedores, cotizaciones, compra, plazos y cierre
+     PARTES 2 Y 3 (v0.11; simplificadas en v0.12): solicitud a proveedores, cotización aprobada, compra y cierre
      ========================================================= */
   const esComprasR = () => esJefe() || rol() === 'compras';
   const soloResidente = () => rol() === 'residente';
   const MXN = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
   const money = n => MXN.format(+n || 0);
   const cotsDe = c => C.cots.filter(q => q.coladoId === c.id);
-  const provDe = id => C.provs.find(x => x.proveedorId === id);
   const dirProv = id => api.proveedores().find(p => p.id === id);
   const nombreProv = (id, q) => { const d = dirProv(id); return d ? api.nombreProveedor(d) : (q && q.proveedor.nombre) || 'Proveedor'; };
   const comprasDe = c => C.compras.filter(x => x.coladoId === c.id);
+  // v0.12: solo se registran cotizaciones aprobadas por Dirección (quedan "elegida" y crean su compra)
   const elegidas = c => cotsDe(c).filter(q => q.estado === 'elegida');
   const necesitaBomba = c => c.bombeo === 'estacionaria' || c.bombeo === 'pluma';
-  // Qué cubre una cotización y cuáles se pisan entre sí
   const cubre = t => (t === 'ambos' ? ['concreto', 'bombeo'] : [t]);
   const seCruzan = (a, b) => cubre(a).some(x => cubre(b).includes(x));
-  const TIPO = { concreto: 'Concreto', bombeo: 'Bombeo', ambos: 'Concreto y bombeo' };
-  const QEST = { solicitada: ['Solicitada', 'wait'], recibida: ['Recibida', 'ext'], elegida: ['Elegida', 'ok'], descartada: ['Descartada', 'draft'] };
+  const TIPO = { ambos: 'Concreto y bombeo', concreto: 'Solo concreto', bombeo: 'Solo bombeo' };
+  const cubierto = (c, t) => elegidas(c).some(q => cubre(q.tipo).includes(t));
+  const faltaCot = c => !cubierto(c, 'concreto') || (necesitaBomba(c) && !cubierto(c, 'bombeo'));
   const puedeCerrar = c => c.estado === 'aprobada' && c.fecha && c.fecha <= today() && (puedeEditar(c.obraId) || esComprasR()) && C.parte2;
-  const tipoPara = (c, prov) => {
-    if (!necesitaBomba(c)) return 'concreto';
-    const t = (prov && prov.tipos) || ['concreto'];
-    return t.includes('concreto') && t.includes('bombeo') ? 'ambos' : t.includes('bombeo') ? 'bombeo' : 'concreto';
-  };
-  // Importe del concreto: Σ volumen × precio por m³
-  const importeConcreto = q => q.lineas.reduce((a, l) => a + (l.volumen || 0) * (l.precio || 0), 0);
+  // Proveedores de colado = los del directorio con tipo o categoría de concreto o bombeo
+  const sinAcento = x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  // "Bombeo de concreto" cuenta como bombeo, no como concreto
+  const surte = p => { const t = sinAcento([p.tipo, ...(p.categorias || [])].join(' | ')).replace(/bomb\w*\s+(de\s+)?concret\w*/g, 'bombeo'); return { concreto: /concret/.test(t), bombeo: /bomb/.test(t) }; };
+  const provsColado = () => api.proveedores().filter(p => p.estatus !== 'no_recomendado' && (surte(p).concreto || surte(p).bombeo))
+    .sort((a, b) => api.nombreProveedor(a).localeCompare(api.nombreProveedor(b), 'es'));
   async function abrirArchivo(ruta) {
     const w = window.open('', '_blank');
     try { const url = await R.urlArchivo(ruta); if (w) w.location.href = url; else location.href = url; }
@@ -692,86 +733,41 @@
     if (!filas.length) throw new Error('Tu rol no puede confirmar este colado.');
   }
 
-  /* ---------- Sección: cotizaciones y comparativo ---------- */
+  /* ---------- Sección: solicitudes enviadas y cotización aprobada ---------- */
   function seccionCotizaciones(c) {
     if (!['aprobada', 'realizado'].includes(c.estado)) return '';
-    if (!C.parte2) return esComprasR() ? `<section class="panel rv"><div class="panel-b"><p class="muted small">Para pedir y comparar cotizaciones falta correr <span class="mono">supabase/09-colados-cotizaciones.sql</span> en Supabase.</p></div></section>` : '';
-    const qs = cotsDe(c), vol = total(c), compras = comprasDe(c);
-    const recibidas = qs.filter(q => q.total > 0 && q.estado !== 'descartada');
-    // "La más baja" solo entre cotizaciones que cubren lo mismo (concreto, bombeo o ambos)
-    const minimoDe = t => { const xs = recibidas.filter(q => q.tipo === t); return xs.length > 1 ? Math.min(...xs.map(q => q.total)) : null; };
+    if (!C.parte2) return esComprasR() ? `<section class="panel col-sec rv"><div class="panel-b"><p class="muted small">Para registrar cotizaciones falta correr <span class="mono">supabase/09-colados-cotizaciones.sql</span> en Supabase.</p></div></section>` : '';
+    const el = elegidas(c), compras = comprasDe(c);
     // El residente solo ve con quién se compró; los precios los manejan compras, coordinación y jefes
     if (soloResidente()) {
-      const el = elegidas(c);
-      return el.length ? `<section class="panel rv" style="--d:140"><header class="panel-h"><h2>Proveedor</h2></header><div class="panel-b"><ul class="tlist">${el.map(q => `<li class="tline"><span class="tmail">${esc(nombreProv(q.proveedorId, q))}</span><span class="tacts"><span class="tagx">${esc(TIPO[q.tipo])}</span></span></li>`).join('')}</ul></div></section>` : '';
+      return el.length ? `<section class="panel col-sec rv" style="--d:140"><header class="panel-h"><h2>Proveedor</h2></header><div class="panel-b"><ul class="tlist">${el.map(q => `<li class="tline"><span class="tmail">${esc(nombreProv(q.proveedorId, q))}</span><span class="tacts"><span class="tagx">${esc(TIPO[q.tipo])}</span></span></li>`).join('')}</ul></div></section>` : '';
     }
+    const sols = c.avisos.filter(a => a.evento === 'solicitud');
+    const falta = c.estado === 'aprobada' && faltaCot(c);
     const fila = q => {
-      const [lab, cls] = QEST[q.estado] || QEST.solicitada;
-      const env = q.envios[q.envios.length - 1];
-      const acc = esComprasR() ? [
-        q.estado !== 'elegida' && q.estado !== 'descartada' && c.estado === 'aprobada' ? `<button class="tbtn tbtn--sm" type="button" data-cot="${esc(q.id)}" data-acc="capturar">${I.edit}<span>${q.total ? 'Corregir' : 'Capturar'}</span></button>` : '',
-        q.estado === 'recibida' && c.estado === 'aprobada' ? `<button class="tbtn tbtn--sm col-elegir" type="button" data-cot="${esc(q.id)}" data-acc="elegir">${I.check}<span>Elegir</span></button>` : '',
-        q.estado === 'descartada' && c.estado === 'aprobada' ? `<button class="tbtn tbtn--sm" type="button" data-cot="${esc(q.id)}" data-acc="reactivar">${I.undo}<span>Reactivar</span></button>` : '',
-        q.estado === 'elegida' && !q.compraIds.some(id => C.compras.some(x => x.id === id)) ? `<button class="tbtn tbtn--sm" type="button" data-cot="${esc(q.id)}" data-acc="deshacer">${I.undo}<span>Deshacer elección</span></button>` : '',
-        ['solicitada', 'recibida'].includes(q.estado) && c.estado === 'aprobada' ? `<button class="ibtn" type="button" data-cot="${esc(q.id)}" data-acc="descartar" title="Descartar" aria-label="Descartar">${I.close}</button>` : ''
-      ].join('') : '';
-      return `<tr class="${q.estado === 'elegida' ? 'col-win' : q.estado === 'descartada' ? 'col-off' : ''}">
-        <td><b>${esc(nombreProv(q.proveedorId, q))}</b><small class="muted d-blk">${esc(TIPO[q.tipo])}${env ? ` · pedida ${esc(fDateT(env.en))}${env.canales ? ' por ' + esc(env.canales.join(' y ')) : ''}` : ''}</small>
-          ${q.archivos.length ? `<div class="col-arch">${q.archivos.map(a => `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}">${I.file}<span>${esc(a.nombre)}</span></button>`).join('')}</div>` : ''}</td>
-        <td><span class="tagx tagx--${cls}">${lab}</span>${q.vigencia ? `<small class="muted d-blk">vigente al ${esc(fDate(q.vigencia))}</small>` : ''}</td>
-        <td class="num">${q.lineas.length ? money(importeConcreto(q)) : '—'}${q.lineas.length && vol ? `<small class="muted d-blk">${money(importeConcreto(q) / vol)}/m³</small>` : ''}</td>
-        <td class="num">${q.bombeo != null ? money(q.bombeo) : '—'}</td>
-        <td class="num">${q.otros ? money(q.otros) : '—'}</td>
-        <td class="num"><b>${q.total ? money(q.total) : '—'}</b>${minimoDe(q.tipo) != null && q.total === minimoDe(q.tipo) ? '<small class="col-min d-blk">la más baja</small>' : ''}</td>
-        <td class="col-acc">${acc}</td></tr>
-        ${q.condiciones ? `<tr class="col-cond"><td colspan="7"><small class="muted">${esc(q.condiciones)}</small></td></tr>` : ''}`;
+      const sinCompra = !q.compraIds.some(id => C.compras.some(x => x.id === id));
+      return `<li class="tline"><div><b>${esc(nombreProv(q.proveedorId, q))}</b><small class="muted d-blk">${esc(TIPO[q.tipo])}${q.subtotal && q.total && Math.abs(q.total - q.subtotal) < 0.5 ? ' · sin IVA' : ''}${q.elegidaEn ? ' · registró ' + esc(q.elegidaPor) + ' · ' + esc(fDateT(q.elegidaEn)) : ''}</small>
+        ${q.condiciones ? `<small class="muted d-blk">${esc(q.condiciones)}</small>` : ''}
+        ${q.archivos.length ? `<div class="col-arch">${q.archivos.map(a => `<button type="button" class="fchip" data-ruta="${esc(a.ruta)}">${I.file}<span>${esc(a.nombre)}</span></button>`).join('')}</div>` : ''}</div>
+        <span class="tacts"><b>${money(q.total)}</b>${esComprasR() && sinCompra ? `<button class="ibtn" type="button" data-cot="${esc(q.id)}" data-acc="quitar" title="Quitar (su compra ya se borró)" aria-label="Quitar cotización">${I.close}</button>` : ''}</span></li>`;
     };
-    return `<section class="panel rv" style="--d:140">
-      <header class="panel-h"><h2>Cotizaciones <span class="n">${qs.length}</span></h2>
-        ${esComprasR() && c.estado === 'aprobada' ? `<button class="tbtn tbtn--sm" type="button" data-cot-nueva>${I.plus}<span>Registrar cotización</span></button>` : ''}</header>
+    return `<section class="panel col-sec rv" style="--d:140">
+      <header class="panel-h"><h2>Cotización aprobada</h2>
+        ${esComprasR() && falta ? `<button class="tbtn tbtn--sm" type="button" data-cot-nueva>${I.plus}<span>Registrar cotización aprobada</span></button>` : ''}</header>
       <div class="panel-b">
-        ${qs.length ? `<div class="tablewrap tablewrap--bg"><table class="tbl col-cmp"><thead><tr><th>Proveedor</th><th>Estado</th><th class="num">Concreto</th><th class="num">Bombeo</th><th class="num">Otros</th><th class="num">Total con IVA</th><th></th></tr></thead>
-          <tbody>${qs.map(fila).join('')}</tbody></table></div>`
-          : `<p class="muted small">${esComprasR() ? 'Usa <b>Pedir cotizaciones</b> para mandar la solicitud a los proveedores de colado, o <b>Registrar cotización</b> si te la dieron por otro medio.' : 'Compras todavía no pide cotizaciones.'}</p>`}
+        ${el.length ? `<ul class="tlist">${el.map(fila).join('')}</ul>` : `<p class="muted small">Manda la solicitud a los proveedores; cuando Dirección apruebe una cotización, regístrala aquí con su archivo y se crea la compra.</p>`}
+        ${falta && el.length ? `<p class="col-aviso">${I.alert}<span>Falta la cotización ${cubierto(c, 'concreto') ? 'del bombeo' : 'del concreto'}.</span></p>` : ''}
         ${compras.length ? `<div class="col-compras"><b>Compras</b>${compras.map(x => `<a class="tline" href="#/c/${esc(x.id)}"><span class="tmail">${esc(x.proveedor.nombre)}</span><span class="tacts">${['cotizacion', 'pago', 'factura', 'remision'].map(t => `<span class="dchip${x[t] ? ' ok' : ''}">${x[t] ? I.check : I.clock}${{ cotizacion: 'Cotización', pago: 'Pago', factura: 'Factura', remision: 'Remisiones' }[t]}</span>`).join('')}</span></a>`).join('')}</div>` : ''}
+        ${sols.length ? `<div class="col-sol">${sols.slice(0, 4).map(a => `<span>${a.para.some(p => p.canal === 'whatsapp') ? I.wa : I.mail} Solicitud a ${esc([...new Set(a.para.map(p => p.proveedor || p.nombre || p.correo))].join(', '))} · ${esc(fDateT(a.en))}</span>`).join('')}</div>` : ''}
       </div></section>`;
   }
 
-  /* ---------- Sección: plazos del proveedor y confirmación ---------- */
-  // Fecha y hora límite: el día anterior al colado a la hora que marca el proveedor ("15:00")
-  const limite = (c, hhmm) => {
-    if (!c.fecha || !/^\d{1,2}:\d{2}$/.test(hhmm || '')) return null;
-    const d = addDays(toDate(c.fecha), -1), [h, m] = hhmm.split(':').map(Number);
-    d.setHours(h, m, 0, 0); return d;
-  };
-  function plazos(c) {
-    const el = elegidas(c);
-    const qc = el.find(q => cubre(q.tipo).includes('concreto')), qb = el.find(q => cubre(q.tipo).includes('bombeo'));
-    const pc = qc && provDe(qc.proveedorId), pb = qb && provDe(qb.proveedorId);
-    const pagado = comprasDe(c).some(x => x.pago);
-    const out = [];
-    if (pc && limite(c, pc.limiteConfirmar)) out.push({ t: 'Confirmar o cancelar el concreto sin cargo', d: limite(c, pc.limiteConfirmar), hecho: !!c.confirmadoEn });
-    if (pb && necesitaBomba(c) && limite(c, pb.limiteBomba)) out.push({ t: 'Cancelar la bomba sin cargo', d: limite(c, pb.limiteBomba), hecho: !!c.confirmadoEn });
-    if (pc && limite(c, pc.limitePago)) out.push({ t: 'Pago liberado', d: limite(c, pc.limitePago), hecho: pagado });
-    const avisos = [];
-    const vol = total(c);
-    if (pc && pc.minimoM3 && vol < pc.minimoM3) avisos.push(`El pedido (${m3(vol)}) es menor al mínimo de ${m3(pc.minimoM3)} del proveedor: puede haber cargo por la diferencia.`);
-    if (pb && necesitaBomba(c) && pb.minimoBombeoM3 && vol < pb.minimoBombeoM3) avisos.push(`El bombeo se cobra mínimo ${m3(pb.minimoBombeoM3)}; el pedido es de ${m3(vol)}.`);
-    if (pb && c.bombeo === 'estacionaria' && pb.tuberiaIncluida != null && c.tuberiaM > pb.tuberiaIncluida) avisos.push(`Se piden ${c.tuberiaM} m de tubería y el proveedor incluye ${pb.tuberiaIncluida} m: los ${c.tuberiaM - pb.tuberiaIncluida} m extra se cobran aparte.`);
-    return { out, avisos, hayElegida: el.length > 0 };
-  }
-  const fLim = d => `${DIA[d.getDay()].slice(0, 3)} ${d.getDate()} ${MES[d.getMonth()].slice(0, 3)}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  // Lo que urge de un colado aprobado (para la lista y el contador): plazo vencido o de hoy sin cumplir
-  const urgente = c => c.estado === 'aprobada' && C.parte2 && plazos(c).out.some(x => !x.hecho && x.d - new Date() < 864e5);
-  function seccionPlazos(c) {
-    if (c.estado !== 'aprobada' || !C.parte2 || soloResidente()) return '';
-    const { out, avisos, hayElegida } = plazos(c), ahora = new Date();
-    return `<section class="panel rv" style="--d:120"><header class="panel-h"><h2>Plazos y confirmación</h2></header><div class="panel-b">
-      ${hayElegida ? '' : '<p class="muted small">Cuando elijas la cotización aparecen aquí los plazos del proveedor (configúralos en <b>Proveedores de colado</b>).</p>'}
-      ${out.length ? `<ul class="checks">${out.map(x => { const venc = !x.hecho && ahora > x.d, hoy = !x.hecho && !venc && x.d - ahora < 864e5;
-        return `<li class="${x.hecho ? 'ok' : venc ? 'no' : 'meh'}">${I[x.hecho ? 'okc' : venc ? 'x' : 'clock']}<span><b>${esc(x.t)}</b><br>antes del ${esc(fLim(x.d))}${x.hecho ? ' · listo' : venc ? ' · <b>ya pasó</b>' : hoy ? ' · <b>hoy</b>' : ''}</span></li>`; }).join('')}</ul>` : hayElegida ? '<p class="muted small">El proveedor elegido no tiene horas límite registradas.</p>' : ''}
-      ${avisos.map(a => `<p class="col-aviso">${I.alert}<span>${esc(a)}</span></p>`).join('')}
-      ${esComprasR() && hayElegida ? `<div class="acts"><button class="btn${c.confirmadoEn ? '' : ' btn--solid'}" type="button" data-confirmar>${I.check}<span>${c.confirmadoEn ? 'Quitar confirmación' : 'Marcar confirmado con el proveedor'}</span></button></div>` : ''}
+  /* ---------- Sección: confirmación con el proveedor (v0.12: sin plazos ni mínimos) ---------- */
+  function seccionConfirmacion(c) {
+    if (c.estado !== 'aprobada' || !C.parte2 || soloResidente() || !elegidas(c).length) return '';
+    return `<section class="panel rv" style="--d:120"><header class="panel-h"><h2>Confirmación</h2></header><div class="panel-b">
+      <p class="muted small">Confirma con el proveedor la fecha, hora, volumen y bombeo${nEv(c) > 1 ? ' de cada evento' : ''} antes del colado.</p>
+      ${esComprasR() ? `<div class="acts"><button class="btn${c.confirmadoEn ? '' : ' btn--solid'}" type="button" data-confirmar>${I.check}<span>${c.confirmadoEn ? 'Quitar confirmación' : 'Marcar confirmado con el proveedor'}</span></button></div>` : ''}
       ${c.confirmadoEn ? `<p class="muted small">Confirmado por ${esc(c.confirmadoPor)} · ${esc(fDateT(c.confirmadoEn))}</p>` : ''}
     </div></section>`;
   }
@@ -788,99 +784,69 @@
     </div></section>`;
   }
 
-  /* ---------- Acciones sobre una cotización ---------- */
+  /* ---------- Quitar una cotización cuya compra ya se borró ---------- */
   async function accionCot(c, q, acc) {
-    if (!q) return;
-    const upd = async (f, msg) => {
-      if (await hacer(async () => { const filas = ok(await sb().from('colado_cotizaciones').update(f).eq('id', q.id).select('id')); if (!filas.length) throw new Error('Tu rol no puede modificar cotizaciones.'); }, msg)) api.rerender();
-    };
-    if (acc === 'capturar') return drCotizacion(c, q);
-    if (acc === 'descartar') { if (await api.confirmar({ titulo: 'Descartar cotización', texto: `La cotización de <b>${esc(nombreProv(q.proveedorId, q))}</b> queda descartada (se puede reactivar).`, ok: 'Descartar' })) await upd({ estado: 'descartada' }, 'Cotización descartada.'); return; }
-    if (acc === 'reactivar') return upd({ estado: q.total ? 'recibida' : 'solicitada' }, 'Cotización reactivada.');
-    if (acc === 'deshacer') return upd({ estado: 'recibida', compra_ids: [] }, 'Se deshizo la elección.');
-    if (acc === 'elegir') return elegir(c, q);
+    if (!q || acc !== 'quitar') return;
+    if (!(await api.confirmar({ titulo: 'Quitar cotización', texto: `Se quita la cotización de <b>${esc(nombreProv(q.proveedorId, q))}</b> (su compra ya no existe). Después puedes registrar otra.`, ok: 'Quitar' }))) return;
+    if (await hacer(async () => {
+      ok(await sb().from('colado_cotizaciones').update({ estado: 'descartada', compra_ids: [] }).eq('id', q.id).select('id'));
+      ok(await sb().from('colado_cotizaciones').delete().eq('id', q.id).select('id'));
+    }, 'Cotización quitada.')) api.rerender();
   }
 
-  // Elegir: la cotización queda "elegida", se crea su compra (con la cotización como documento) y se descartan las que cubren lo mismo
-  async function elegir(c, q) {
-    const otras = cotsDe(c).filter(x => x.id !== q.id && ['solicitada', 'recibida'].includes(x.estado) && seCruzan(x.tipo, q.tipo));
-    const ya = elegidas(c).find(x => seCruzan(x.tipo, q.tipo));
-    if (ya) { toast(`Ya está elegida la de ${nombreProv(ya.proveedorId, ya)} para ${TIPO[ya.tipo].toLowerCase()}.`); return; }
-    const falta = necesitaBomba(c) && q.tipo === 'concreto' && !elegidas(c).some(x => cubre(x.tipo).includes('bombeo')) ? ' Después elige también la del bombeo.' : '';
-    if (!(await api.confirmar({ titulo: 'Elegir cotización', texto: `Se creará la compra a <b>${esc(nombreProv(q.proveedorId, q))}</b> por <b>${money(q.total)}</b> (${esc(TIPO[q.tipo].toLowerCase())}), con su cotización como documento.${otras.length ? ` ${otras.length === 1 ? 'La otra cotización de lo mismo queda descartada.' : 'Las otras ' + otras.length + ' cotizaciones de lo mismo quedan descartadas.'}` : ''}${falta}`, ok: 'Elegir y crear compra' }))) return;
-    const d = dirProv(q.proveedorId) || {};
-    let cid;
-    try {
-      ok(await sb().from('colado_cotizaciones').update({ estado: 'elegida' }).eq('id', q.id).select('id'));
-      cid = await R.crearCompra({ obraId: c.obraId, anio: c.anio, semana: c.semana, partidas: [], fechaEntrega: c.fecha, coladoId: c.id,
-        proveedor: { nombre: nombreProv(q.proveedorId, q), rfc: d.rfc || q.proveedor.rfc || '', razonSocial: d.razonSocial || q.proveedor.razonSocial || '', id: q.proveedorId || '' } });
-      await R.cargar();
-      await R.agregarDocumentoExistente(cid, 'cotizacion', { archivos: q.archivos, fecha: today(), monto: q.total });
-      if (q.subtotal && q.total && Math.abs(q.total - q.subtotal) < 0.5) await R.actualizarCompra(cid, { iva: false });   // cotización sin IVA
-      ok(await sb().from('colado_cotizaciones').update({ compra_ids: [...q.compraIds, cid] }).eq('id', q.id).select('id'));
-      if (otras.length) ok(await sb().from('colado_cotizaciones').update({ estado: 'descartada' }).in('id', otras.map(x => x.id)).select('id'));
-    } catch (e) {
-      if (!cid) await sb().from('colado_cotizaciones').update({ estado: 'recibida' }).eq('id', q.id);   // no quedó compra: se deshace la elección
-      toast(cid ? `La compra se creó, pero falta terminar: ${e.message}` : e.message);
-      await cargar(true); api.rerender(); return;
-    }
-    await cargar(true);
-    toast('Compra creada. Sigue en Compras y facturas: pago, factura y remisiones.');
-    api.rerender();
-  }
-
-  /* ---------- Pedir cotizaciones (correo con PDF y WhatsApp) ---------- */
+  /* ---------- Mandar la solicitud a proveedores del directorio (correo con PDF y WhatsApp) ---------- */
   async function drPedir(c) {
     await api.refresh();
-    const provs = C.provs.filter(x => x.activo && (necesitaBomba(c) || x.tipos.includes('concreto')));
-    if (!provs.length) { toast('Primero registra los proveedores de colado.'); return drProveedores(); }
-    const ya = new Set(cotsDe(c).map(q => q.proveedorId));
-    const contactosDe = x => ((dirProv(x.proveedorId) || {}).contactos || []).filter(k => k.activo !== false);
+    const provs = provsColado();
+    const yaA = new Set(c.avisos.filter(a => a.evento === 'solicitud').flatMap(a => a.para.map(p => p.proveedorId)).filter(Boolean));
+    const telsWa = ts => (ts || []).filter(t => t.whatsapp && String(t.numero).replace(/\D/g, '').length >= 10);
     api.openPanel(`<form class="dr-form" novalidate>
-      <header class="dr-h"><div><p class="mono">${esc(c.folio)} · ${m3(total(c))}</p><h2 id="dr-title">Pedir cotizaciones</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
+      <header class="dr-h"><div><p class="mono">${esc(c.folio)} · ${m3(total(c))}${nEv(c) > 1 ? ' · ' + nEv(c) + ' eventos' : ''}</p><h2 id="dr-title">Mandar solicitud a proveedores</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
       <div class="dr-b">
-        <p class="fld-h">Se manda la solicitud con el PDF adjunto por correo a los contactos marcados; las respuestas te llegan a ti. A los que tienen WhatsApp se les puede mandar con un clic al terminar.</p>
-        ${provs.map(x => { const ks = contactosDe(x); return `<fieldset class="fs col-pp" data-pp="${esc(x.proveedorId)}"><legend><label class="chk chk--wa"><input type="checkbox" data-pp-on${ya.has(x.proveedorId) ? '' : ' checked'}><span><b>${esc(nombreProv(x.proveedorId))}</b> · ${esc(x.tipos.map(t => TIPO[t]).join(' y '))}${ya.has(x.proveedorId) ? ' · ya se le pidió' : ''}</span></label></legend><div class="fs-b">
-          ${ks.length ? ks.map(k => `<label class="chk chk--wa"><input type="checkbox" data-k="${esc(k.id)}"${x.contactos.includes(k.id) || !x.contactos.length ? ' checked' : ''}><span>${esc(k.nombre || 'Contacto')}${k.correo ? ' · ' + esc(k.correo) : ' · sin correo'}${k.telefonos.some(t => t.whatsapp) ? ' · WhatsApp' : ''}</span></label>`).join('') : '<p class="muted small">Sin contactos en el directorio.</p>'}
-          ${x.correoExtra ? `<p class="muted small">También se manda a ${esc(x.correoExtra)} (correo de pedidos).</p>` : ''}
-        </div></fieldset>`; }).join('')}
-        <label class="chk chk--wa"><input type="checkbox" name="wa"><span>Mandar también por WhatsApp automático (solo si ya está configurado en Supabase)</span></label>
+        <p class="fld-h">Salen del directorio los proveedores con tipo o categoría de <b>concreto</b> o <b>bombeo</b>. Se manda un correo con el PDF a los contactos marcados (las respuestas te llegan a ti); a los que tienen WhatsApp se les manda con un clic al terminar.</p>
+        ${provs.length ? provs.map(p => { const sv = surte(p), ks = (p.contactos || []).filter(k => k.activo !== false && (k.correo || telsWa(k.telefonos).length));
+          const gen = p.correo || telsWa(p.telefonos).length;
+          return `<fieldset class="fs col-pp" data-pp="${esc(p.id)}"><legend><label class="chk chk--wa"><input type="checkbox" data-pp-on><span><b>${esc(api.nombreProveedor(p))}</b> · ${[sv.concreto && 'Concreto', sv.bombeo && 'Bombeo'].filter(Boolean).join(' y ')}${yaA.has(p.id) ? ' · ya se le mandó' : ''}</span></label></legend><div class="fs-b">
+          ${gen ? `<label class="chk chk--wa"><input type="checkbox" data-gen checked><span>Datos de la empresa${p.correo ? ' · ' + esc(p.correo) : ''}${telsWa(p.telefonos).length ? ' · WhatsApp' : ''}</span></label>` : ''}
+          ${ks.map(k => `<label class="chk chk--wa"><input type="checkbox" data-k="${esc(k.id)}" checked><span>${esc(k.nombre || 'Contacto')}${k.correo ? ' · ' + esc(k.correo) : ''}${telsWa(k.telefonos).length ? ' · WhatsApp' : ''}</span></label>`).join('')}
+          ${gen || ks.length ? '' : '<p class="muted small">Sin correo ni WhatsApp en el directorio: agrégalos en su ficha.</p>'}
+        </div></fieldset>`; }).join('')
+          : '<div class="note">' + I.alert + '<p>No hay proveedores de concreto o bombeo en el directorio. En la ficha de cada uno ponle el tipo "Concreto" o las categorías "Concreto premezclado" / "Bombeo de concreto".</p></div>'}
         <div data-res></div>
       </div>
-      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cerrar</span></button><button type="submit" class="btn btn--solid" data-ok>${I.send}<span>Enviar solicitud</span></button></footer>
+      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cerrar</span></button>${provs.length ? `<button type="submit" class="btn btn--solid" data-ok>${I.send}<span>Enviar solicitud</span></button>` : ''}</footer>
     </form>`, { wide: true }, panel => {
       const f = $('form', panel), err = $('[data-err]', panel), res = $('[data-res]', panel), okb = $('[data-ok]', panel);
       f.addEventListener('submit', async e => {
         e.preventDefault(); err.textContent = '';
-        const envios = $$('[data-pp]', panel).filter(fs => $('[data-pp-on]', fs).checked).map(fs => ({ proveedor_id: fs.dataset.pp, contactos: $$('[data-k]:checked', fs).map(i => i.dataset.k) }));
+        const envios = $$('[data-pp]', panel).filter(fs => $('[data-pp-on]', fs).checked)
+          .map(fs => ({ proveedor_id: fs.dataset.pp, contactos: $$('[data-k]:checked', fs).map(i => i.dataset.k), general: !!($('[data-gen]', fs) || {}).checked }));
         if (!envios.length) { err.textContent = 'Marca al menos un proveedor.'; return; }
+        if (envios.some(x => !x.contactos.length && !x.general)) { err.textContent = 'Marca a quién se le manda en cada proveedor elegido.'; return; }
         okb.disabled = true; $('span', okb).textContent = 'Enviando…';
         let data;
         try {
-          const r = await sb().functions.invoke('cotizar-colado', { body: { colado_id: c.id, envios, whatsapp: f.wa.checked } });
+          const r = await sb().functions.invoke('cotizar-colado', { body: { colado_id: c.id, envios } });
           if (r.error) { let m = ''; try { m = (await r.error.context.json()).error; } catch (x) { /* sin cuerpo */ } throw new Error(m || 'No se pudo enviar (¿está publicada la función "cotizar-colado" en Supabase?).'); }
           data = r.data;
         } catch (x) { okb.disabled = false; $('span', okb).textContent = 'Enviar solicitud'; err.textContent = x.message; return; }
         await cargar(true);
         okb.hidden = true;
-        const o = obra(c.obraId) || {};
-        const msg = nombre => `Buen día${nombre ? ' ' + nombre.split(' ')[0] : ''}. En Galitha le solicitamos cotización de concreto premezclado${necesitaBomba(c) ? ' y bombeo' : ''} para la obra ${o.nombre || ''}: ${fDateL(c.fecha)}${c.hora ? ' a las ' + c.hora : ''}, ${[c.elemento, c.ubicacion].filter(Boolean).join(' ')}, ${m3(total(c))}, ${BOMBEO[c.bombeo].toLowerCase()}.\nCaracterísticas completas en el PDF (la liga vence en 7 días): ${data.pdf_url}\nGracias. ${(N.perfil || {}).nombre || ''}`;
+        const o = obra(c.obraId) || {}, evs = eventosDe(c);
+        const cuando = evs.length > 1 ? `${evs.length} eventos (${evs.map(x => fDateL(x.fecha) + (x.hora ? ' ' + x.hora : '')).join('; ')})` : `${fDateL(c.fecha)}${c.hora ? ' a las ' + c.hora : ''}`;
+        const msg = nombre => `Buen día${nombre ? ' ' + nombre.split(' ')[0] : ''}. En Galitha le solicitamos cotización de concreto premezclado${necesitaBomba(c) ? ' y bombeo' : ''} para la obra ${o.nombre || ''}: ${cuando}, ${m3(total(c))}, ${BOMBEO[c.bombeo].toLowerCase()}.\nCaracterísticas completas en el PDF (la liga vence en 7 días): ${data.pdf_url}\nGracias. ${(N.perfil || {}).nombre || ''}`;
         res.innerHTML = `<div class="col-res"><h3>Resultado</h3>${data.resultados.map(r => `<div class="col-r">
           <b>${esc(r.nombre || nombreProv(r.proveedor_id))}</b>
-          ${r.correo_ok ? `<p class="ok">${I.okc}<span>Correo enviado a ${esc(r.correos.map(x => x.correo).join(', '))}</span></p>` : r.correos.length ? '' : '<p class="muted small">Sin correo registrado.</p>'}
-          ${r.wa_ok ? `<p class="ok">${I.okc}<span>WhatsApp automático enviado (${r.wa_ok})</span></p>` : ''}
+          ${r.correo_ok ? `<p class="ok">${I.okc}<span>Correo enviado a ${esc(r.correos.map(x => x.correo).join(', '))}</span></p>` : r.correos.length ? '' : '<p class="muted small">Sin correo marcado.</p>'}
           ${r.errores.map(x => `<p class="no">${I.x}<span>${esc(x)}</span></p>`).join('')}
-          ${!data.wa_auto && r.whatsapps.length ? `<div class="acts">${r.whatsapps.map(w0 => ({ nombre: w0.nombre, telefono: String(w0.telefono || '').replace(/\D/g, '').slice(-10) })).filter(w => w.telefono.length === 10).map(w => `<a class="btn btn--sm" target="_blank" rel="noopener" data-wa="${esc(r.proveedor_id)}" data-wan="${esc(w.nombre)}" data-wat="${esc(w.telefono)}" href="https://wa.me/52${esc(w.telefono)}?text=${encodeURIComponent(msg(w.nombre))}">${I.wa}<span>WhatsApp a ${esc(w.nombre || w.telefono)}</span></a>`).join('')}</div>` : ''}
+          ${r.whatsapps.length ? `<div class="acts">${r.whatsapps.map(w0 => ({ nombre: w0.nombre, telefono: String(w0.telefono || '').replace(/\D/g, '').slice(-10) })).filter(w => w.telefono.length === 10).map(w => `<a class="btn btn--sm" target="_blank" rel="noopener" data-wa="${esc(r.proveedor_id)}" data-wap="${esc(r.nombre || '')}" data-wan="${esc(w.nombre)}" data-wat="${esc(w.telefono)}" href="https://wa.me/52${esc(w.telefono)}?text=${encodeURIComponent(msg(w.nombre))}">${I.wa}<span>WhatsApp a ${esc(w.nombre || w.telefono)}</span></a>`).join('')}</div>` : ''}
         </div>`).join('')}
         ${data.pdf_url ? `<p class="muted small">PDF enviado: <a class="link-u" href="${esc(data.pdf_url)}" target="_blank" rel="noopener">abrir</a> (liga de 7 días).</p>` : ''}</div>`;
-        // WhatsApp con un clic: se anota el envío en la cotización de ese proveedor
+        // WhatsApp con un clic: se anota como solicitud enviada
         $$('[data-wa]', res).forEach(a => a.addEventListener('click', async () => {
-          const pid = a.dataset.wa, x = provDe(pid), q = C.cots.find(y => y.coladoId === c.id && y.proveedorId === pid);
-          const envio = { en: new Date().toISOString(), por: yoId(), canales: ['whatsapp'], para: [{ nombre: a.dataset.wan, telefono: a.dataset.wat }] };
           try {
-            if (q) ok(await sb().from('colado_cotizaciones').update({ envios: [...q.envios, envio] }).eq('id', q.id).select('id'));
-            else { const d = dirProv(pid) || {}; ok(await sb().from('colado_cotizaciones').insert({ colado_id: c.id, proveedor_id: pid, tipo: tipoPara(c, x), proveedor: { nombre: nombreProv(pid), rfc: d.rfc || '', razonSocial: d.razonSocial || '' }, envios: [envio] }).select('id')); }
-            await cargar(true); a.classList.add('is-sent');
+            ok(await sb().from('avisos').insert({ colado_id: c.id, evento: 'solicitud', para: [{ proveedorId: a.dataset.wa, proveedor: a.dataset.wap, nombre: a.dataset.wan, canal: 'whatsapp', telefono: a.dataset.wat }] }).select('id'));
+            a.classList.add('is-sent'); await cargar(true); api.rerender();
           } catch (e2) { toast('Se abrió WhatsApp, pero no se anotó el envío: ' + e2.message); }
         }));
         api.rerender();
@@ -888,75 +854,67 @@
     });
   }
 
-  /* ---------- Capturar (o registrar) una cotización recibida ---------- */
-  async function drCotizacion(c, q) {
+  /* ---------- Registrar la cotización aprobada por Dirección: crea su compra ---------- */
+  async function drCotizacion(c) {
     await api.refresh();
-    const vol = total(c);
-    const lineas = q && q.lineas.length ? q.lineas : c.concretos.map(k => ({ concepto: [k.fc && "f'c " + k.fc, k.tma, k.revenimiento && 'rev. ' + k.revenimiento, ...(k.aditivos || [])].filter(Boolean).join(' · ') || 'Concreto', volumen: k.volumen, precio: 0 }));
-    const opciones = q ? [] : C.provs.filter(x => x.activo && !cotsDe(c).some(y => y.proveedorId === x.proveedorId));
-    const ivaPrev = !q || !q.subtotal || !q.total || Math.abs(q.total - q.subtotal) >= 0.5;
+    const sugerido = !necesitaBomba(c) ? 'concreto' : cubierto(c, 'concreto') ? 'bombeo' : cubierto(c, 'bombeo') ? 'concreto' : 'ambos';
+    const tipos = Object.keys(TIPO).filter(t => (necesitaBomba(c) || t === 'concreto') && !elegidas(c).some(q => seCruzan(q.tipo, t)));
+    const pc = provsColado(), otros = api.proveedores().filter(p => !pc.includes(p)).sort((a, b) => api.nombreProveedor(a).localeCompare(api.nombreProveedor(b), 'es'));
+    const opt = p => `<option value="${esc(p.id)}">${esc(api.nombreProveedor(p))}</option>`;
     api.openPanel(`<form class="dr-form" novalidate>
-      <header class="dr-h"><div><p class="mono">${esc(c.folio)} · ${m3(vol)}</p><h2 id="dr-title">${q ? 'Cotización de ' + esc(nombreProv(q.proveedorId, q)) : 'Registrar cotización'}</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
-      <div class="dr-b">
-        ${q ? '' : `<fieldset class="fs"><legend><span class="mono">1</span>Proveedor</legend><div class="fs-b">
-          ${opciones.length ? `<select class="in" name="prov">${opciones.map(x => `<option value="${esc(x.proveedorId)}">${esc(nombreProv(x.proveedorId))} · ${esc(x.tipos.map(t => TIPO[t]).join(' y '))}</option>`).join('')}</select>`
-            : '<p class="muted small">Todos los proveedores de colado ya tienen cotización en este colado. Agrega otro en "Proveedores de colado".</p>'}
-        </div></fieldset>`}
-        <fieldset class="fs"><legend><span class="mono">${q ? 1 : 2}</span>Lo que cotizó (sin IVA)</legend><div class="fs-b">
-          <label class="fld"><span class="fld-l">Cubre</span><select class="in" name="tipo">${Object.entries(TIPO).map(([k, l]) => `<option value="${k}"${(q ? q.tipo : tipoPara(c, provDe((opciones[0] || {}).proveedorId))) === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-          <div data-lineas>${lineas.map(l => `<div class="col-lin" data-l><span class="col-lin-c">${esc(l.concepto)}</span>
-            <label class="fld"><span class="fld-l">m³</span><input class="in" name="lv" type="number" min="0" step="0.5" value="${l.volumen || ''}"></label>
-            <label class="fld"><span class="fld-l">Precio por m³</span><input class="in" name="lp" type="number" min="0" step="0.01" value="${l.precio || ''}" inputmode="decimal"></label>
-            <input type="hidden" name="lc" value="${esc(l.concepto)}"></div>`).join('')}</div>
-          <div class="grid2">
-            <label class="fld"><span class="fld-l">Bombeo (importe)</span><input class="in" name="bombeo" type="number" min="0" step="0.01" value="${q && q.bombeo != null ? q.bombeo : ''}"></label>
-            <label class="fld"><span class="fld-l">Otros cargos</span><input class="in" name="otros" type="number" min="0" step="0.01" value="${q && q.otros ? q.otros : ''}"><span class="fld-h">Tubería extra, horario, mínimo… (descríbelo abajo).</span></label>
-            <label class="chk chk--wa fld--wide"><input type="checkbox" name="iva"${ivaPrev ? ' checked' : ''}><span>Lleva IVA (16 %)</span></label>
-            <p class="fld--wide col-sum" data-sum></p>
-            <label class="fld"><span class="fld-l">Total con IVA <em>*</em></span><input class="in" name="total" type="number" min="0" step="0.01" value="${q && q.total ? q.total : ''}"><span class="fld-h">Se calcula solo; corrígelo si el proveedor redondeó.</span></label>
-            <label class="fld"><span class="fld-l">Vigencia</span><input class="in" name="vig" type="date" value="${esc(q ? q.vigencia : '')}"></label>
-            <label class="fld fld--wide"><span class="fld-l">Condiciones</span><textarea class="in" name="cond" rows="3" placeholder="Pago de contado un día antes, confirmar antes de las 15:00, mínimo 6 m³…">${esc(q ? q.condiciones : '')}</textarea></label>
-            <label class="fld fld--wide"><span class="fld-l">Archivo de la cotización (PDF o foto)</span><input class="in" name="arch" type="file" accept="application/pdf,image/*" multiple>
-              <span class="fld-h">${q && q.archivos.length ? 'Ya tiene: ' + q.archivos.map(a => esc(a.nombre)).join(', ') + '. Lo que subas se agrega.' : 'Se guarda en la carpeta privada de la obra.'}</span></label>
-          </div>
-        </div></fieldset>
-      </div>
-      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cancelar</span></button><button type="submit" class="btn btn--solid" data-ok${!q && !opciones.length ? ' disabled' : ''}>${I.check}<span>Guardar cotización</span></button></footer>
+      <header class="dr-h"><div><p class="mono">${esc(c.folio)} · ${m3(total(c))}${nEv(c) > 1 ? ' · ' + nEv(c) + ' eventos' : ''}</p><h2 id="dr-title">Registrar cotización aprobada</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
+      <div class="dr-b"><div class="grid2">
+        <p class="fld-h fld--wide">Solo la cotización que ya aprobó Dirección. Al guardarla se crea la compra, que sigue en Compras y facturas (pago, factura y remisiones de cada olla).</p>
+        <label class="fld fld--wide"><span class="fld-l">Proveedor <em>*</em></span><select class="in" name="prov"><option value="">Elige…</option>
+          ${pc.length ? `<optgroup label="Concreto y bombeo">${pc.map(opt).join('')}</optgroup>` : ''}<optgroup label="Otros del directorio">${otros.map(opt).join('')}</optgroup></select></label>
+        <label class="fld fld--wide"><span class="fld-l">Qué cubre <em>*</em></span><select class="in" name="tipo">${tipos.map(t => `<option value="${t}"${t === sugerido ? ' selected' : ''}>${TIPO[t]}</option>`).join('')}</select>
+          <span class="fld-h">${necesitaBomba(c) ? 'Si el bombeo lo cotizó otro proveedor, registra esta como "Solo concreto" y después la del bombeo.' : 'Este colado es de tiro directo: no lleva bombeo.'}</span></label>
+        <label class="fld"><span class="fld-l">Total de la cotización <em>*</em></span><input class="in" name="total" type="number" min="0" step="0.01" inputmode="decimal"></label>
+        <label class="chk chk--wa" style="align-self:end"><input type="checkbox" name="iva" checked><span>El total incluye IVA (lleva factura)</span></label>
+        <label class="fld fld--wide"><span class="fld-l">Archivo de la cotización (PDF o foto)</span><input class="in" name="arch" type="file" accept="application/pdf,image/*" multiple><span class="fld-h">Se guarda en la carpeta privada de la obra y queda como la cotización de la compra.</span></label>
+        <label class="fld fld--wide"><span class="fld-l">Condiciones o notas</span><textarea class="in" name="cond" rows="2" placeholder="Precio por m³, forma de pago, vigencia…"></textarea></label>
+      </div></div>
+      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cancelar</span></button><button type="submit" class="btn btn--solid" data-ok${tipos.length ? '' : ' disabled'}>${I.check}<span>Guardar y crear compra</span></button></footer>
     </form>`, { wide: true }, panel => {
       const f = $('form', panel), err = $('[data-err]', panel);
-      let totalTocado = !!(q && q.total);
-      const leer = () => {
-        const soloBomba = f.tipo.value === 'bombeo';
-        $('[data-lineas]', panel).hidden = soloBomba;
-        const ls = soloBomba ? [] : $$('[data-l]', panel).map(b => ({ concepto: $('[name=lc]', b).value, volumen: num($('[name=lv]', b).value) || 0, precio: num($('[name=lp]', b).value) || 0 }));
-        const conc = ls.reduce((a, l) => a + l.volumen * l.precio, 0), sub = conc + (num(f.bombeo.value) || 0) + (num(f.otros.value) || 0);
-        return { ls, conc, sub, tot: Math.round(sub * (f.iva.checked ? 1.16 : 1) * 100) / 100 };
-      };
-      const pintar = () => { const x = leer(); $('[data-sum]', panel).innerHTML = `Concreto ${money(x.conc)} · subtotal <b>${money(x.sub)}</b> · ${f.iva.checked ? 'con IVA' : 'sin IVA'} <b>${money(x.tot)}</b>${vol && x.conc ? ` · ${money(x.conc / vol)}/m³` : ''}`; if (!totalTocado) f.total.value = x.tot || ''; };
-      pintar();
-      f.addEventListener('input', e => { api.markDirty(); if (e.target.name === 'total') totalTocado = true; else pintar(); });
-      f.iva.addEventListener('change', () => { totalTocado = false; pintar(); });
-      f.tipo.addEventListener('change', () => { totalTocado = false; pintar(); });
+      f.addEventListener('input', api.markDirty);
       f.addEventListener('submit', async e => {
         e.preventDefault(); err.textContent = '';
-        const x = leer(), tot = num(f.total.value);
-        if (!(tot > 0)) { err.textContent = 'Escribe el total con IVA.'; return; }
-        const pid = q ? q.proveedorId : f.prov && f.prov.value;
+        const pid = f.prov.value, tipo = f.tipo.value, tot = num(f.total.value), iva = f.iva.checked;
         if (!pid) { err.textContent = 'Elige el proveedor.'; return; }
+        if (!(tot > 0)) { err.textContent = 'Escribe el total de la cotización.'; return; }
+        if (!f.arch.files.length && !(await api.confirmar({ titulo: 'Sin archivo', texto: 'No subiste el archivo de la cotización. ¿Guardarla así? Lo puedes subir después en la compra.', ok: 'Guardar sin archivo' }))) return;
         $('[data-ok]', panel).disabled = true;
-        const subidos = [];
+        const d = dirProv(pid) || {}, nombre = nombreProv(pid);
+        const subidos = []; let cid, qid;
         try {
           for (const file of f.arch.files) subidos.push(await R.subirArchivo(c.obraId, 'colado-' + c.id, file));
-          const fila = { tipo: f.tipo.value, estado: 'recibida', lineas: f.tipo.value === 'bombeo' ? [] : x.ls.filter(l => l.precio > 0), bombeo: num(f.bombeo.value), otros: num(f.otros.value),
-            subtotal: Math.round(x.sub * 100) / 100, total: tot, vigencia: f.vig.value || null, condiciones: f.cond.value.trim(),
-            archivos: [...(q ? q.archivos : []), ...subidos.map(({ ruta, nombre }) => ({ ruta, nombre }))] };
-          if (q) ok(await sb().from('colado_cotizaciones').update(fila).eq('id', q.id).select('id'));
-          else { const d = dirProv(pid) || {}; ok(await sb().from('colado_cotizaciones').insert(Object.assign({ colado_id: c.id, proveedor_id: pid, proveedor: { nombre: nombreProv(pid), rfc: d.rfc || '', razonSocial: d.razonSocial || '' } }, fila)).select('id')); }
-        } catch (x2) {
-          await R.borrarArchivos(subidos.map(s2 => s2.ruta)).catch(() => {});
-          $('[data-ok]', panel).disabled = false; err.textContent = x2.message; return;
+          const datos = { tipo, estado: 'recibida', total: tot, subtotal: iva ? Math.round(tot / 1.16 * 100) / 100 : tot, condiciones: f.cond.value.trim(), compra_ids: [],
+            archivos: subidos.map(({ ruta, nombre: n }) => ({ ruta, nombre: n })), proveedor: { nombre, rfc: d.rfc || '', razonSocial: d.razonSocial || '' } };
+          // Una por proveedor y colado: si quedó una vieja (solicitada o descartada) se reutiliza
+          const vieja = cotsDe(c).find(q => q.proveedorId === pid);
+          if (vieja && vieja.estado === 'elegida') throw new Error(`Ya está registrada la cotización de ${nombre}. Si cubre las dos cosas, quítala y regístrala como "Concreto y bombeo".`);
+          if (vieja) { ok(await sb().from('colado_cotizaciones').update(datos).eq('id', vieja.id).select('id')); qid = vieja.id; }
+          else qid = ok(await sb().from('colado_cotizaciones').insert(Object.assign({ colado_id: c.id, proveedor_id: pid }, datos)).select('id'))[0].id;
+          ok(await sb().from('colado_cotizaciones').update({ estado: 'elegida' }).eq('id', qid).select('id'));
+          cid = await R.crearCompra({ obraId: c.obraId, anio: c.anio, semana: c.semana, partidas: [], fechaEntrega: c.fecha, coladoId: c.id,
+            proveedor: { nombre, rfc: d.rfc || '', razonSocial: d.razonSocial || '', id: pid } });
+          await R.cargar();
+          await R.agregarDocumentoExistente(cid, 'cotizacion', { archivos: datos.archivos, fecha: today(), monto: tot });
+          if (!iva) await R.actualizarCompra(cid, { iva: false });
+          ok(await sb().from('colado_cotizaciones').update({ compra_ids: [cid] }).eq('id', qid).select('id'));
+        } catch (x) {
+          if (!cid) {   // no quedó compra: se deshace lo registrado
+            if (qid) await sb().from('colado_cotizaciones').update({ estado: 'descartada' }).eq('id', qid);
+            await R.borrarArchivos(subidos.map(s2 => s2.ruta)).catch(() => {});
+          }
+          $('[data-ok]', panel).disabled = false;
+          err.textContent = cid ? `La compra se creó, pero falta terminar: ${x.message}` : x.message;
+          await cargar(true); return;
         }
-        await cargar(true); api.closeDrawer(true); toast('Cotización guardada.'); api.rerender();
+        await cargar(true); api.closeDrawer(true);
+        toast(faltaCot(C.colados.find(x => x.id === c.id) || c) ? 'Compra creada. Falta registrar la otra cotización.' : 'Compra creada. Sigue en Compras y facturas: pago, factura y remisiones.');
+        api.rerender();
       });
     });
   }
@@ -992,75 +950,15 @@
     });
   }
 
-  /* ---------- Catálogo: proveedores de colado (compras y jefes) ---------- */
-  async function drProveedores() {
-    await api.refresh(); await cargar();
-    if (!C.parte2) { toast('Falta correr 09-colados-cotizaciones.sql en Supabase.'); return; }
-    const DIR = api.proveedores().slice().sort((a, b) => api.nombreProveedor(a).localeCompare(api.nombreProveedor(b), 'es'));
-    const tarjeta2 = x => { const d = dirProv(x.proveedorId) || { contactos: [] }; return `<fieldset class="fs col-pv" data-pv="${esc(x.proveedorId)}"><legend>${esc(nombreProv(x.proveedorId))}</legend><div class="fs-b">
-      <div class="toggles">${['concreto', 'bombeo'].map(t => `<label class="chk chk--pill"><input type="checkbox" name="tipo" value="${t}"${x.tipos.includes(t) ? ' checked' : ''}><span>${TIPO[t]}</span></label>`).join('')}
-        <label class="chk chk--wa"><input type="checkbox" name="activo"${x.activo ? ' checked' : ''}><span>Activo</span></label></div>
-      <div class="fld"><span class="fld-l">A quién se le manda la solicitud</span>${d.contactos.length ? d.contactos.map(k => `<label class="chk chk--wa"><input type="checkbox" name="ct" value="${esc(k.id)}"${x.contactos.includes(k.id) ? ' checked' : ''}><span>${esc(k.nombre || 'Contacto')}${k.correo ? ' · ' + esc(k.correo) : ''}${k.telefonos.some(t => t.whatsapp) ? ' · WhatsApp' : ''}</span></label>`).join('') : '<p class="muted small">Sin contactos: agrégalos en su ficha del directorio.</p>'}</div>
-      <div class="grid2 grid3">
-        <label class="fld fld--wide2"><span class="fld-l">Correo de pedidos</span><input class="in" name="correo" type="email" value="${esc(x.correoExtra)}"></label>
-        <label class="fld"><span class="fld-l">Confirmar o cancelar concreto (día anterior)</span><input class="in" name="lc" type="time" value="${esc(x.limiteConfirmar)}"></label>
-        <label class="fld"><span class="fld-l">Cancelar bomba (día anterior)</span><input class="in" name="lb" type="time" value="${esc(x.limiteBomba)}"></label>
-        <label class="fld"><span class="fld-l">Pago liberado (día anterior)</span><input class="in" name="lpago" type="time" value="${esc(x.limitePago)}"></label>
-        <label class="fld"><span class="fld-l">Mínimo de concreto (m³)</span><input class="in" name="minc" type="number" min="0" step="0.5" value="${x.minimoM3 ?? ''}"></label>
-        <label class="fld"><span class="fld-l">Mínimo de bombeo (m³)</span><input class="in" name="minb" type="number" min="0" step="0.5" value="${x.minimoBombeoM3 ?? ''}"></label>
-        <label class="fld"><span class="fld-l">Tubería incluida (m)</span><input class="in" name="tub" type="number" min="0" step="1" value="${x.tuberiaIncluida ?? ''}"></label>
-        <label class="fld fld--wide2"><span class="fld-l">Notas</span><input class="in" name="notas" value="${esc(x.notas)}"></label>
-      </div>
-      <button type="button" class="tbtn tbtn--sm" data-quitar-pv>${I.trash}<span>Quitar de proveedores de colado</span></button>
-    </div></fieldset>`; };
-    api.openPanel(`<form class="dr-form" novalidate>
-      <header class="dr-h"><div><p class="mono">Programación de colados</p><h2 id="dr-title">Proveedores de colado</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
-      <div class="dr-b">
-        <p class="fld-h">Salen del directorio de proveedores. Marca qué surte cada uno, a qué contactos se les manda la solicitud y sus reglas: con las horas límite la app avisa el día anterior al colado.</p>
-        <div class="col-add"><select class="in" name="nuevo"><option value="">Agregar un proveedor del directorio…</option>${DIR.filter(p => !provDe(p.id)).map(p => `<option value="${esc(p.id)}">${esc(api.nombreProveedor(p))}</option>`).join('')}</select></div>
-        <div data-lista>${C.provs.map(tarjeta2).join('') || '<p class="muted small" data-vacio>Todavía no hay proveedores de colado.</p>'}</div>
-      </div>
-      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cancelar</span></button><button type="submit" class="btn btn--solid" data-ok>${I.check}<span>Guardar</span></button></footer>
-    </form>`, { wide: true }, panel => {
-      const f = $('form', panel), lista = $('[data-lista]', panel), quitar = new Set();
-      f.addEventListener('input', api.markDirty);
-      f.nuevo.addEventListener('change', () => {
-        const id = f.nuevo.value; if (!id) return;
-        const v = $('[data-vacio]', lista); if (v) v.remove();
-        quitar.delete(id);
-        lista.insertAdjacentHTML('afterbegin', tarjeta2({ proveedorId: id, tipos: ['concreto'], contactos: [], correoExtra: '', limiteConfirmar: '', limiteBomba: '', limitePago: '', minimoM3: null, minimoBombeoM3: null, tuberiaIncluida: null, notas: '', activo: true }));
-        f.nuevo.querySelector(`option[value="${id}"]`).remove(); f.nuevo.value = ''; api.markDirty();
-      });
-      lista.addEventListener('click', e => { const b = e.target.closest('[data-quitar-pv]'); if (!b) return; const fs = b.closest('[data-pv]'); if (provDe(fs.dataset.pv)) quitar.add(fs.dataset.pv); fs.remove(); api.markDirty(); });
-      f.addEventListener('submit', async e => {
-        e.preventDefault();
-        const filas = $$('[data-pv]', lista).map(fs => {
-          const g = n => fs.querySelector(`[name="${n}"]`);
-          return { proveedor_id: fs.dataset.pv, tipos: $$('[name=tipo]:checked', fs).map(i => i.value), contactos: $$('[name=ct]:checked', fs).map(i => i.value), correo_extra: g('correo').value.trim(),
-            limite_confirmar: g('lc').value, limite_cancelar_bomba: g('lb').value, limite_pago: g('lpago').value, minimo_m3: num(g('minc').value), minimo_bombeo_m3: num(g('minb').value),
-            tuberia_incluida_m: num(g('tub').value), notas: g('notas').value.trim(), activo: g('activo').checked };
-        });
-        const sinTipo = filas.find(x => !x.tipos.length);
-        if (sinTipo) { $('[data-err]', panel).textContent = `Marca si ${nombreProv(sinTipo.proveedor_id)} surte concreto, bombeo o ambos.`; return; }
-        $('[data-ok]', panel).disabled = true;
-        try {
-          if (filas.length) ok(await sb().from('colado_proveedores').upsert(filas).select('proveedor_id'));
-          if (quitar.size) ok(await sb().from('colado_proveedores').delete().in('proveedor_id', [...quitar]).select('proveedor_id'));
-        } catch (x) { $('[data-ok]', panel).disabled = false; $('[data-err]', panel).textContent = x.message; return; }
-        await cargar(); api.closeDrawer(true); toast('Proveedores de colado guardados.'); api.rerender();
-      });
-    });
-  }
-
   /* ---------- Contador de la barra lateral ---------- */
   let cargado = false;
   function chrome() {
     if (!N.perfil) return;
     if (!cargado) { cargado = true; cargar().then(chrome, () => { }); return; }
     const n = esCoord() ? C.colados.filter(c => c.estado === 'enviada').length
-      : rol() === 'compras' ? C.colados.filter(c => c.estado === 'aprobada' && (!elegidas(c).length || urgente(c))).length
+      : rol() === 'compras' ? C.colados.filter(c => c.estado === 'aprobada' && C.parte2 && faltaCot(c)).length
         : C.colados.filter(c => ['borrador', 'devuelta'].includes(c.estado) && esResDe(c.obraId)).length;
-    $$('[data-ccount]').forEach(el => { el.textContent = n || ''; el.title = esCoord() ? 'Por aprobar' : rol() === 'compras' ? 'Por cotizar o con plazo por vencer' : 'Borradores y devueltos'; });
+    $$('[data-ccount]').forEach(el => { el.textContent = n || ''; el.title = esCoord() ? 'Por aprobar' : rol() === 'compras' ? 'Aprobados sin cotización registrada' : 'Borradores y devueltos'; });
   }
 
   return {

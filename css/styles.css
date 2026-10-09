@@ -1720,6 +1720,7 @@ body[data-rol="direccion"] .solo-compras, body[data-rol="admin"] .solo-compras, 
 .pf .pf-kv td { text-align: left; height: auto; padding: 3px 6px; }
 .pf .pf-marca { margin-bottom: 6px; padding: 4px; border: 1.5px solid #B4313A; color: #B4313A; text-align: center; font-weight: 800; font-size: 10pt; letter-spacing: .1em; }
 .pf--col .pf-n { margin-top: 10px; }
+.pf--col .pf-ev { margin: 10px 0 4px; font-size: 8.5pt; break-after: avoid; }
 @media (max-width: 900px) {
   .colcard { grid-template-columns: 60px minmax(0, 1fr); padding: 14px; gap: 12px; }
   .col-side { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; align-items: center; }
@@ -1733,6 +1734,19 @@ body[data-rol="direccion"] .solo-compras, body[data-rol="admin"] .solo-compras, 
 .col-chips span { padding: 4px 10px; border-radius: 99px; background: var(--surface); font-size: 12.5px; font-weight: 650; }
 .col-kl small { display: block; margin-top: 6px; }
 .col-tot { margin: 10px 4px 0; text-align: right; color: var(--muted); font-weight: 650; }
+/* v0.12: separación de lo que va arriba de la cuadrícula del detalle (aviso, cotizaciones) y eventos */
+.col-sec { margin-bottom: 16px; }
+p.k-aviso.col-sec { margin: 0 0 12px; }
+.col-ev { padding: 14px; margin-bottom: 14px; border: 1.5px solid var(--lav); border-radius: 22px; }
+.col-ev-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.col-ev-h b { font-size: 15px; color: var(--navy); }
+.col-ev-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 10px; }
+.col-ev-t b { font-size: 14px; }
+.col-ev-t span { color: var(--muted); font-size: 13px; font-weight: 600; }
+.col-kl + .col-ev-t { margin-top: 16px; }
+.col-sol { margin: 12px 0 0; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.col-sol span { display: flex; align-items: center; gap: 6px; }
+.col-sol .ico { flex: none; width: 14px; height: 14px; }
 .col-tot b { color: var(--ink); font-size: 16px; }
 /* Programación de colados · cotizaciones, compra, plazos y cierre (v0.11) */
 .col-hb { display: flex; flex-wrap: wrap; gap: 8px; }
