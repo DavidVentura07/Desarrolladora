@@ -17,6 +17,10 @@
    - Registro: tabla de asistencia por rango de fechas, con el estado del pase de cada día
      (a tiempo, tarde, no se laboró, sin pase) y las fotos con sus datos.
    Reglas en supabase/12-fuerza-trabajo.sql.
+   Partes 2 y 3 (14-fuerza-avisos.sql): "Publicar cambios" llama a la Edge Function "aviso-fuerza"
+   (WhatsApp/correo a Dirección, admin y coordinador; la misma función avisa sola, con pg_cron, cuando
+   pasa la hora límite sin pase de lista). En Registro: PDF con logo y PDF interno con fotos (Edge Function
+   "reporte-fuerza"), Excel, y "Enviar al gestor IMSS" (correo con el PDF + WhatsApp con un clic).
    ========================================================= */
 (window.GALITHA_MODULOS = window.GALITHA_MODULOS || []).push(api => {
   const R = window.StoreReq;
@@ -69,7 +73,7 @@
   const MOV = { alta: 'Alta', reingreso: 'Reingreso', baja: 'Baja', transferencia_sale: 'Transferido', transferencia_entra: 'Llegó por transferencia', cambio: 'Cambio' };
 
   /* ---------- Datos ---------- */
-  let F = { listo: false, error: '', obras: [], trab: [], datos: {}, movs: [], pases: [], asis: [], fotos: [], listas: { puestos: [], cuadrillas: [] }, limite: '09:00', ini: '', fin: '' };
+  let F = { listo: false, error: '', obras: [], trab: [], datos: {}, movs: [], pases: [], asis: [], fotos: [], listas: { puestos: [], cuadrillas: [] }, limite: '09:00', ini: '', fin: '', avisos: [] };
   const quien = id => (id ? N.nombreDe(id) || 'Usuario' : '');
   const deTrab = t => ({ id: t.id, obraId: t.obra_id, nombre: str(t.nombre), puesto: str(t.puesto), cuadrilla: str(t.cuadrilla), contratistaId: t.contratista_id || '',
     contratista: str(t.contratista), activo: !!t.activo, alta: t.alta, baja: t.baja || '', motivoBaja: str(t.motivo_baja) });
@@ -91,8 +95,10 @@
       sb().from('trabajador_movimientos').select('*').order('en', { ascending: false }).limit(800).then(r => r, () => ({ data: [] })),
       sb().from('pases_lista').select('*').gte('fecha', F.ini).lte('fecha', F.fin),
       sb().from('colado_listas').select('clave, valores').in('clave', Object.keys(LISTAS)),
-      sb().from('config').select('valor').eq('clave', 'fuerza_trabajo')
-    ]);
+      sb().from('config').select('valor').eq('clave', 'fuerza_trabajo'),
+      // v0.13 partes 2 y 3 (14-fuerza-avisos.sql): avisos por obra
+      sb().from('avisos').select('*').not('obra_id', 'is', null).order('en', { ascending: false }).limit(300).then(r => r, () => ({ data: [] }))
+    ]).then(rs => { F.avisos = arr((rs[6] || {}).data).map(a => ({ obraId: a.obra_id, evento: a.evento, fecha: a.fecha || '', para: arr(a.para), por: quien(a.por), en: a.en })); return rs; });
     if (ts.error || ps.error) { F.listo = false; F.error = (ts.error || ps.error).message; return F; }
     F.listo = true; F.error = '';
     F.trab = ts.data.map(deTrab);
@@ -540,6 +546,7 @@
     return `${ed && pend.length ? `<div class="ft-chg rv" style="--d:80"><div><b>${pend.length} ${pend.length === 1 ? 'cambio sin publicar' : 'cambios sin publicar'}</b>
         <span>${[nAlt && `${nAlt} ${nAlt === 1 ? 'alta' : 'altas'}`, nBaj && `${nBaj} ${nBaj === 1 ? 'baja' : 'bajas'}`, nTra && `${nTra} ${nTra === 1 ? 'transferencia' : 'transferencias'}`, nCam && `${nCam} ${nCam === 1 ? 'cambio' : 'cambios'}`].filter(Boolean).join(' · ')}. La oficina ya los ve; al publicar se avisa a Dirección y al coordinador.</span></div>
         <button type="button" class="btn btn--solid" data-publicar>${ic('send')}<span>Publicar cambios</span></button></div>` : ''}
+      ${(() => { const u = ultimoAviso(o.id, 'ft_cambios'); return u ? `<p class="ft-res">Último aviso de cambios: ${esc(fechaHora(u.en))} · ${esc(paraTxt(u))}.</p>` : ''; })()}
       <div class="ft-th rv" style="--d:100"><p><b>${ts.length}</b> ${ts.length === 1 ? 'trabajador activo' : 'trabajadores activos'} en ${esc(o.nombre)}</p>
         ${ed ? `<button type="button" class="btn btn--solid btn--sm" data-alta>${ic('plus')}<span>Dar de alta</span></button>` : ''}</div>
       ${ts.length ? `<div class="ft-lista ft-lista--trab">${ts.map(t => {
@@ -559,7 +566,9 @@
       bp.disabled = true;
       let r;
       try { r = ok(await sb().rpc('publicar_movimientos', { p_obra: o.id })); } catch (e) { bp.disabled = false; toast(e.message); return; }
-      toast(r && r.total ? `${r.total} ${r.total === 1 ? 'cambio publicado' : 'cambios publicados'}.` : 'No había cambios por publicar.');
+      if (!r || !r.total) { toast('No había cambios por publicar.'); api.rerender(); return; }
+      toast(`${r.total} ${r.total === 1 ? 'cambio publicado' : 'cambios publicados'}. Avisando a Dirección y al coordinador…`);
+      await avisarCambios(o.id);
       api.rerender();
     });
   }
@@ -763,6 +772,13 @@
         <label class="fld"><span class="fld-l">Hasta</span><input class="in" type="date" name="hasta" value="${esc(UI.hasta)}"></label>
         <div class="ft-rapidos"><button type="button" class="tbtn tbtn--sm" data-rango="sem">Esta semana</button><button type="button" class="tbtn tbtn--sm" data-rango="ant">Semana pasada</button><button type="button" class="tbtn tbtn--sm" data-rango="mes">Este mes</button></div>
       </div>
+      <div class="ft-rep rv" style="--d:90">
+        ${esCoord() ? `<button type="button" class="tbtn tbtn--sm" data-rep="pdf">${ic('file')}<span>PDF</span></button>
+          <button type="button" class="tbtn tbtn--sm" data-rep="fotos">${ic('camara')}<span>PDF con fotos (interno)</span></button>` : ''}
+        <button type="button" class="tbtn tbtn--sm" data-rep="xls">${ic('db')}<span>Excel</span></button>
+        ${esCoord() ? `<button type="button" class="btn btn--solid btn--sm" data-rep="gestor">${ic('send')}<span>Enviar al gestor IMSS</span></button>` : ''}
+      </div>
+      ${(() => { const u = ultimoAviso(o.id, 'ft_reporte'); return u ? `<p class="ft-res">Último envío al gestor: ${esc(fechaHora(u.en))} · ${esc(paraTxt(u))}${u.para[0] && u.para[0].desde ? ` · periodo ${esc(fMes(u.para[0].desde))} al ${esc(fMes(u.para[0].hasta))}` : ''}.</p>` : ''; })()}
       <p class="ft-res rv" style="--d:100">${dias.length} ${dias.length === 1 ? 'día laboral' : 'días laborales'} · <b class="ok">${resumen.ok} a tiempo</b>${resumen.late ? ` · <b class="late">${resumen.late} fuera de hora</b>` : ''}${resumen.no ? ` · <b class="no">${resumen.no} sin pase de lista</b>` : ''}</p>
       ${ts.length || dias.length ? `<div class="ft-tw rv" style="--d:120"><table class="ft-tabla">
         <thead><tr><th class="l">Trabajador</th>${dias.map((d, i) => `<th><button type="button" class="ft-dh" data-dia-f="${esc(d)}"${est[i].p ? '' : ' disabled'}>${esc(fCorta(d))}</button></th>`).join('')}<th>Asist.</th><th>Faltas</th></tr>
@@ -784,6 +800,137 @@
       else fijar(h.slice(0, 8) + '01', h);
     }));
     $$('[data-dia-f]', sec).forEach(b => b.addEventListener('click', () => { const p = paseDe(o.id, b.dataset.diaF); if (p) drDia(p); }));
+    $$('[data-rep]', sec).forEach(b => b.addEventListener('click', () => {
+      const k = b.dataset.rep;
+      if (k === 'xls') excelFT(o); else if (k === 'gestor') drGestor(o); else verPdf(o, k === 'fotos', b);
+    }));
+  }
+
+  /* =========================================================
+     PARTES 2 Y 3: avisos, reportes (PDF y Excel) y envío al gestor del IMSS
+     ========================================================= */
+  const errFuncion = async (r, nombre) => {
+    let m = ''; try { m = (await r.error.context.json()).error; } catch (x) { /* sin cuerpo */ }
+    return new Error(m || `No se pudo completar (¿está publicada la función "${nombre}" en Supabase?).`);
+  };
+  const canal = p => (p.canal === 'whatsapp' ? 'WhatsApp' : 'correo');
+  const paraTxt = a => a.para.map(p => `${p.nombre || p.correo || p.telefono}${p.proveedor && p.proveedor !== p.nombre ? ' (' + p.proveedor + ')' : ''} · ${canal(p)}`).join(', ');
+  const fechaHora = iso => `${fMes(FMX.format(new Date(iso)))} ${horaMX(iso)}`;
+  const ultimoAviso = (obraId, evento) => F.avisos.find(a => a.obraId === obraId && a.evento === evento);
+  async function avisarCambios(obraId) {
+    try {
+      const r = await sb().functions.invoke('aviso-fuerza', { body: { evento: 'cambios', obra_id: obraId } });
+      if (r.error) throw await errFuncion(r, 'aviso-fuerza');
+      if (r.data.omitido) return;
+      toast(`Aviso enviado a ${r.data.aviso.para.map(p => `${p.nombre} (${canal(p)})`).join(', ')}.`);
+    } catch (e) { toast(`Los cambios quedaron publicados, pero no salió el aviso: ${e.message}`); }
+  }
+  async function verPdf(o, fotos, btn) {
+    const w = window.open('', '_blank');
+    const t0 = btn.innerHTML; btn.disabled = true; btn.querySelector('span').textContent = 'Armando PDF…';
+    try {
+      const r = await sb().functions.invoke('reporte-fuerza', { body: { accion: 'pdf', obra_id: o.id, desde: UI.desde, hasta: UI.hasta, fotos } });
+      if (r.error) throw await errFuncion(r, 'reporte-fuerza');
+      if (w) w.location.href = r.data.url; else location.href = r.data.url;
+    } catch (e) { if (w) w.close(); toast(e.message); }
+    btn.disabled = false; btn.innerHTML = t0;
+  }
+
+  // Excel (HTML con extensión .xls, como los demás reportes de la plataforma)
+  function excelFT(o) {
+    const dias = diasRango(), vd = verDatos(o.id);
+    const pase = d => paseDe(o.id, d);
+    const movs = F.movs.filter(m => m.obraId === o.id && m.fecha >= UI.desde && m.fecha <= UI.hasta && (m.tipo !== 'cambio' || /^salario/i.test(m.detalle)))
+      .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+    const conMarca = new Set(F.asis.filter(a => { const p = F.pases.find(x => x.id === a.paseId); return p && p.obraId === o.id && p.fecha >= UI.desde && p.fecha <= UI.hasta; }).map(a => a.trabajadorId));
+    const ts = F.trab.filter(t => (t.obraId === o.id && t.alta <= UI.hasta && (t.activo || !t.baja || t.baja >= UI.desde)) || conMarca.has(t.id)).sort(porGrupo);
+    const td = (v, st = '') => `<td style="border:.5pt solid #999;font-size:9pt;vertical-align:top;${st}">${v}</td>`;
+    const th = v => `<th style="border:.5pt solid #999;background:#153588;color:#fff;font-size:9pt">${v}</th>`;
+    const txt = "mso-number-format:'\\@'", num = "mso-number-format:'\\#\\,\\#\\#0\\.00';text-align:right";
+    const dt = id => (vd && F.datos[id]) || {};
+    const MOVX = { alta: 'Alta', reingreso: 'Reingreso', baja: 'Baja', transferencia_sale: 'Transferido a otra obra', transferencia_entra: 'Llegó de otra obra', cambio: 'Cambio de salario' };
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body>
+      <table style="border-collapse:collapse;font-family:Calibri">
+      <tr><td colspan="8" style="font-size:14pt;font-weight:bold;color:#153588">GALITHA · Reporte de fuerza de trabajo</td></tr>
+      <tr><td colspan="8">Obra: <b>${esc(o.nombre)}</b> · Residente: ${esc((o.residente || {}).nombre || 'sin residente')} · Del ${esc(fMes(UI.desde))} al ${esc(fMes(UI.hasta))} ${esc(UI.hasta.slice(0, 4))}</td></tr>
+      <tr><td></td></tr>
+      <tr><td colspan="8" style="font-weight:bold;color:#153588">ALTAS, BAJAS Y CAMBIOS DEL PERIODO</td></tr>
+      <tr>${['Fecha', 'Movimiento', 'Detalle', 'Nombre', 'Puesto', 'Cuadrilla', 'Contratista', ...(vd ? ['CURP', 'NSS', 'Salario semanal'] : [])].map(th).join('')}</tr>
+      ${movs.length ? movs.map(m => { const t = trabDe(m.trabajadorId) || {}; const x = dt(m.trabajadorId);
+        return `<tr>${td(esc(m.fecha))}${td(esc(MOVX[m.tipo] || m.tipo))}${td(esc(m.tipo === 'alta' ? '' : m.detalle))}${td(esc(t.nombre || ''))}${td(esc(t.puesto || ''))}${td(esc(t.cuadrilla || ''))}${td(esc(t.contratista || ''))}${vd ? td(esc(x.curp || ''), txt) + td(esc(x.nss || ''), txt) + td(x.salario == null ? '' : x.salario, num) : ''}</tr>`; }).join('')
+        : `<tr><td colspan="8">Sin movimientos en el periodo.</td></tr>`}
+      <tr><td></td></tr>
+      <tr><td colspan="8" style="font-weight:bold;color:#153588">ASISTENCIA (A asistencia · F falta · R retardo · M medio día · P permiso · I incapacidad · C comisión · D descanso)</td></tr>
+      <tr>${['Nombre', 'Puesto', 'Cuadrilla', 'Contratista', ...(vd ? ['CURP', 'NSS', 'Salario semanal'] : []), ...dias.map(fCorta), 'Asistencias', 'Faltas'].map(th).join('')}</tr>
+      <tr>${td('<b>Pase de lista</b>')}${td('')}${td('')}${td('')}${vd ? td('') + td('') + td('') : ''}${dias.map(d => { const p = pase(d); return td(p ? (p.estado === 'no_labora' ? 'No se laboró' : horaMX(p.en) + (p.aTiempo ? '' : ' (tarde)')) : 'Sin pase'); }).join('')}${td('')}${td('')}</tr>
+      ${ts.map(t => { const x = dt(t.id); let na = 0, nf = 0;
+        const celdas = dias.map(d => { const p = pase(d); const a = p && F.asis.find(y => y.paseId === p.id && y.trabajadorId === t.id); if (a) { if (cuentaAsist(a.marca)) na++; if (a.marca === 'F') nf++; }
+          return td(a ? esc(a.marca + (a.hora ? ' ' + a.hora : '')) : '', 'text-align:center'); }).join('');
+        return `<tr>${td(esc(t.nombre))}${td(esc(t.puesto))}${td(esc(t.cuadrilla))}${td(esc(t.contratista))}${vd ? td(esc(x.curp || ''), txt) + td(esc(x.nss || ''), txt) + td(x.salario == null ? '' : x.salario, num) : ''}${celdas}${td(na, 'text-align:center')}${td(nf, 'text-align:center')}</tr>`; }).join('')}
+      </table></body></html>`;
+    api.descargar(`Fuerza de trabajo ${o.nombre} ${UI.desde} a ${UI.hasta}.xls`.replace(/[\\/:*?"<>|#]+/g, ' '), '﻿' + html, 'application/vnd.ms-excel');
+  }
+
+  // Enviar el reporte al gestor del IMSS (o a otro proveedor del directorio)
+  const esGestor = p => /imss|gestor|nómina|nomina|seguro social|recursos humanos/i.test([p.tipo, ...arr(p.categorias), ...arr(p.etiquetas), p.nombreComercial, p.nombre_comercial, p.razonSocial].join(' '));
+  const telsWa = ts => arr(ts).filter(t => t.whatsapp && String(t.numero).replace(/\D/g, '').length >= 10);
+  async function drGestor(o) {
+    await api.refresh();
+    const provs = api.proveedores().filter(p => p.estatus !== 'no_recomendado').sort((a, b) => (esGestor(b) - esGestor(a)) || api.nombreProveedor(a).localeCompare(api.nombreProveedor(b), 'es'));
+    const sugerido = provs.find(esGestor);
+    const ult = ultimoAviso(o.id, 'ft_reporte');
+    const contactosDe = p => {
+      if (!p) return '';
+      const ks = (p.contactos || []).filter(k => k.activo !== false && (k.correo || telsWa(k.telefonos).length)), gen = p.correo || telsWa(p.telefonos).length;
+      return `${gen ? `<label class="chk chk--wa"><input type="checkbox" data-gen checked><span>Datos de la empresa${p.correo ? ' · ' + esc(p.correo) : ''}${telsWa(p.telefonos).length ? ' · WhatsApp' : ''}</span></label>` : ''}
+        ${ks.map(k => `<label class="chk chk--wa"><input type="checkbox" data-k="${esc(k.id)}" checked><span>${esc(k.nombre || 'Contacto')}${k.correo ? ' · ' + esc(k.correo) : ''}${telsWa(k.telefonos).length ? ' · WhatsApp' : ''}</span></label>`).join('')}
+        ${gen || ks.length ? '' : '<p class="muted small">Sin correo ni WhatsApp en el directorio: agrégalos en su ficha.</p>'}`;
+    };
+    api.openPanel(`<form class="dr-form" novalidate>
+      <header class="dr-h"><div><p class="mono">${esc(o.nombre)} · del ${esc(fMes(UI.desde))} al ${esc(fMes(UI.hasta))}</p><h2 id="dr-title">Enviar al gestor del IMSS</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${ic('close')}</button></header>
+      <div class="dr-b">
+        <p class="fld-h">Se arma el PDF con el logo (altas, bajas y cambios de salario del periodo con CURP, NSS y salario, y la plantilla) y se manda por correo a los contactos marcados; las respuestas te llegan a ti. A los que tienen WhatsApp se les manda con un clic al terminar. <b>Nunca lleva fotos.</b></p>
+        ${ult ? `<div class="note note--info">${ic('send')}<p>Último envío: ${esc(fechaHora(ult.en))} · ${esc(paraTxt(ult))}.</p></div>` : ''}
+        ${!sugerido ? `<div class="note">${ic('alert')}<p>No encontré al gestor en el directorio. Dalo de alta como proveedor (con su correo y WhatsApp) y ponle el tipo o la categoría "Gestor IMSS". Mientras, puedes elegir cualquier proveedor.</p></div>` : ''}
+        <label class="fld"><span class="fld-l">Mandar a</span><select class="in" name="prov">${provs.map(p => `<option value="${esc(p.id)}"${sugerido && p.id === sugerido.id ? ' selected' : ''}>${esc(api.nombreProveedor(p))}${esGestor(p) ? ' · gestor' : ''}</option>`).join('')}</select></label>
+        <div class="ft-gk" data-cont>${contactosDe(sugerido || provs[0])}</div>
+        <label class="chk chk--wa"><input type="checkbox" name="asis" checked><span>Incluir la tabla de asistencia</span></label>
+        <label class="fld"><span class="fld-l">Mensaje (opcional)</span><textarea class="in" name="nota" rows="3" maxlength="1000" placeholder="Por ejemplo: favor de dar de baja a Carlos Díaz a partir del 7 de octubre."></textarea></label>
+        <div data-res></div>
+      </div>
+      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cerrar</span></button>${provs.length ? `<button type="submit" class="btn btn--solid" data-ok>${ic('send')}<span>Enviar</span></button>` : ''}</footer>
+    </form>`, { wide: true }, panel => {
+      const f = $('form', panel), err = $('[data-err]', panel), res = $('[data-res]', panel), okb = $('[data-ok]', panel);
+      f.prov && f.prov.addEventListener('change', () => { $('[data-cont]', panel).innerHTML = contactosDe(provs.find(p => p.id === f.prov.value)); });
+      f.addEventListener('submit', async e => {
+        e.preventDefault(); err.textContent = '';
+        const envio = { proveedor_id: f.prov.value, contactos: $$('[data-k]:checked', panel).map(i => i.dataset.k), general: !!($('[data-gen]', panel) || {}).checked };
+        if (!envio.contactos.length && !envio.general) { err.textContent = 'Marca a quién se le manda.'; return; }
+        okb.disabled = true; $('span', okb).textContent = 'Armando y enviando…';
+        let data;
+        try {
+          const r = await sb().functions.invoke('reporte-fuerza', { body: { accion: 'enviar', obra_id: o.id, desde: UI.desde, hasta: UI.hasta, asistencia: f.asis.checked, envios: [envio], nota: f.nota.value.trim() } });
+          if (r.error) throw await errFuncion(r, 'reporte-fuerza');
+          data = r.data;
+        } catch (x) { okb.disabled = false; $('span', okb).textContent = 'Enviar'; err.textContent = x.message; return; }
+        okb.hidden = true;
+        const pila = (nombre, prov) => (!nombre || nombre === prov ? '' : ' ' + api.sinTitulo(nombre).split(' ')[0]);
+        const msg = (nombre, prov) => `Buen día${pila(nombre, prov)}. ${data.mensaje}${f.nota.value.trim() ? '\n' + f.nota.value.trim() : ''}\nPDF (la liga vence en 7 días): ${data.pdf_url}\nGracias. ${(N.perfil || {}).nombre || ''} · Galitha`;
+        res.innerHTML = `<div class="col-res"><h3>Resultado</h3>${data.resultados.map(r => `<div class="col-r"><b>${esc(r.nombre || '')}</b>
+          ${r.correo_ok ? `<p class="ok">${ic('okc')}<span>Correo enviado a ${esc(r.correos.map(x => x.correo).join(', '))}</span></p>` : r.correos.length ? '' : '<p class="muted small">Sin correo marcado.</p>'}
+          ${r.errores.map(x => `<p class="no">${ic('x')}<span>${esc(x)}</span></p>`).join('')}
+          ${r.whatsapps.length ? `<div class="acts">${r.whatsapps.filter(w => String(w.telefono).length === 10).map(w => `<a class="btn btn--sm" target="_blank" rel="noopener" data-wa="${esc(r.proveedor_id)}" data-wap="${esc(r.nombre || '')}" data-wan="${esc(w.nombre)}" data-wat="${esc(w.telefono)}" href="https://wa.me/52${esc(w.telefono)}?text=${encodeURIComponent(msg(w.nombre, r.nombre))}">${ic('wa')}<span>WhatsApp a ${esc(w.nombre || w.telefono)}</span></a>`).join('')}</div>` : ''}
+        </div>`).join('')}
+        <p class="muted small">PDF enviado: <a class="link-u" href="${esc(data.pdf_url)}" target="_blank" rel="noopener">abrir</a> (liga de 7 días).</p></div>`;
+        $$('[data-wa]', res).forEach(a => a.addEventListener('click', async () => {
+          try {
+            ok(await sb().from('avisos').insert({ obra_id: o.id, evento: 'ft_reporte', para: [{ proveedorId: a.dataset.wa, proveedor: a.dataset.wap, nombre: a.dataset.wan, canal: 'whatsapp', telefono: a.dataset.wat, desde: UI.desde, hasta: UI.hasta }] }).select('id'));
+            a.classList.add('is-sent');
+          } catch (e2) { toast('Se abrió WhatsApp, pero no se anotó el envío: ' + e2.message); }
+        }));
+        await cargar();
+      });
+    });
   }
 
   /* ---------- Detalle de un día (fotos y corrección) ---------- */

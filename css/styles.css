@@ -1998,3 +1998,6 @@ body.ft-cam-on { overflow: hidden; }
   .ft-rango .fld { width: calc(50% - 7px); }
   .ft-chg .btn { width: 100%; justify-content: center; }
 }
+/* Fuerza de trabajo, partes 2 y 3: reportes y envío al gestor */
+.ft-rep { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 6px; }
+.ft-gk { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 14px; }
