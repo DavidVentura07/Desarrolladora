@@ -855,65 +855,107 @@
   }
 
   /* ---------- Registrar la cotización aprobada por Dirección: crea su compra ---------- */
+  // Una cotización → su registro (elegida) y su compra, con la cotización como documento
+  async function registrarCot(c, x) {
+    const d = dirProv(x.pid) || {}, nombre = nombreProv(x.pid);
+    const subidos = []; let cid, qid;
+    try {
+      for (const file of x.files) subidos.push(await R.subirArchivo(c.obraId, 'colado-' + c.id, file));
+      const datos = { tipo: x.tipo, estado: 'recibida', total: x.total, subtotal: x.iva ? Math.round(x.total / 1.16 * 100) / 100 : x.total, condiciones: x.cond, compra_ids: [],
+        archivos: subidos.map(({ ruta, nombre: n }) => ({ ruta, nombre: n })), proveedor: { nombre, rfc: d.rfc || '', razonSocial: d.razonSocial || '' } };
+      // Una por proveedor y colado: si quedó una vieja (solicitada o descartada) se reutiliza
+      const vieja = cotsDe(c).find(q => q.proveedorId === x.pid);
+      if (vieja && vieja.estado === 'elegida') throw new Error(`Ya está registrada la cotización de ${nombre}. Si cubre las dos cosas, quítala y regístrala como "Concreto y bombeo".`);
+      if (vieja) { ok(await sb().from('colado_cotizaciones').update(datos).eq('id', vieja.id).select('id')); qid = vieja.id; }
+      else qid = ok(await sb().from('colado_cotizaciones').insert(Object.assign({ colado_id: c.id, proveedor_id: x.pid }, datos)).select('id'))[0].id;
+      ok(await sb().from('colado_cotizaciones').update({ estado: 'elegida' }).eq('id', qid).select('id'));
+      cid = await R.crearCompra({ obraId: c.obraId, anio: c.anio, semana: c.semana, partidas: [], fechaEntrega: c.fecha, coladoId: c.id,
+        proveedor: { nombre, rfc: d.rfc || '', razonSocial: d.razonSocial || '', id: x.pid } });
+      await R.cargar();
+      await R.agregarDocumentoExistente(cid, 'cotizacion', { archivos: datos.archivos, fecha: today(), monto: x.total });
+      if (!x.iva) await R.actualizarCompra(cid, { iva: false });
+      ok(await sb().from('colado_cotizaciones').update({ compra_ids: [cid] }).eq('id', qid).select('id'));
+    } catch (e) {
+      if (!cid) {   // no quedó compra: se deshace lo registrado
+        if (qid) await sb().from('colado_cotizaciones').update({ estado: 'descartada' }).eq('id', qid);
+        await R.borrarArchivos(subidos.map(s2 => s2.ruta)).catch(() => {});
+      }
+      throw new Error(cid ? `La compra de ${nombre} se creó, pero falta terminar: ${e.message}` : e.message);
+    }
+  }
+
   async function drCotizacion(c) {
     await api.refresh();
-    const sugerido = !necesitaBomba(c) ? 'concreto' : cubierto(c, 'concreto') ? 'bombeo' : cubierto(c, 'bombeo') ? 'concreto' : 'ambos';
-    const tipos = Object.keys(TIPO).filter(t => (necesitaBomba(c) || t === 'concreto') && !elegidas(c).some(q => seCruzan(q.tipo, t)));
+    const bomba = necesitaBomba(c), hayC = cubierto(c, 'concreto'), hayB = cubierto(c, 'bombeo');
+    // Qué falta: con bomba y nada registrado se elige "una sola" o "separadas"; si ya hay una, solo la otra
+    const modoLibre = bomba && !hayC && !hayB;
+    const fijo = !bomba ? 'concreto' : hayC ? 'bombeo' : hayB ? 'concreto' : '';
     const pc = provsColado(), otros = api.proveedores().filter(p => !pc.includes(p)).sort((a, b) => api.nombreProveedor(a).localeCompare(api.nombreProveedor(b), 'es'));
-    const opt = p => `<option value="${esc(p.id)}">${esc(api.nombreProveedor(p))}</option>`;
+    // En cada bloque primero los proveedores que surten eso
+    const opciones = t => {
+      const de = pc.filter(p => t === 'ambos' ? surte(p).concreto : surte(p)[t]), resto = [...pc.filter(p => !de.includes(p)), ...otros];
+      const opt = p => `<option value="${esc(p.id)}">${esc(api.nombreProveedor(p))}</option>`;
+      return `<option value="">Elige…</option>${de.length ? `<optgroup label="${t === 'bombeo' ? 'Bombeo' : 'Concreto'}">${de.map(opt).join('')}</optgroup>` : ''}<optgroup label="Otros del directorio">${resto.map(opt).join('')}</optgroup>`;
+    };
+    const bloque = (t, titulo) => `<fieldset class="fs" data-q="${t}"><legend>${titulo}</legend><div class="fs-b"><div class="grid2">
+      <label class="fld fld--wide"><span class="fld-l">Proveedor <em>*</em></span><select class="in" name="prov">${opciones(t)}</select></label>
+      <label class="fld"><span class="fld-l">Total de la cotización <em>*</em></span><input class="in" name="total" type="number" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="chk chk--wa" style="align-self:end"><input type="checkbox" name="iva" checked><span>El total incluye IVA (lleva factura)</span></label>
+      <label class="fld fld--wide"><span class="fld-l">Archivo de la cotización (PDF o foto)</span><input class="in" name="arch" type="file" accept="application/pdf,image/*" multiple></label>
+      <label class="fld fld--wide"><span class="fld-l">Condiciones o notas</span><textarea class="in" name="cond" rows="2" placeholder="${t === 'bombeo' ? 'Tubería incluida, horario, forma de pago…' : 'Precio por m³, forma de pago, vigencia…'}"></textarea></label>
+    </div></div></fieldset>`;
+    const T2 = { ambos: 'Concreto y bombeo', concreto: 'Concreto', bombeo: 'Bombeo' };
     api.openPanel(`<form class="dr-form" novalidate>
       <header class="dr-h"><div><p class="mono">${esc(c.folio)} · ${m3(total(c))}${nEv(c) > 1 ? ' · ' + nEv(c) + ' eventos' : ''}</p><h2 id="dr-title">Registrar cotización aprobada</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
-      <div class="dr-b"><div class="grid2">
-        <p class="fld-h fld--wide">Solo la cotización que ya aprobó Dirección. Al guardarla se crea la compra, que sigue en Compras y facturas (pago, factura y remisiones de cada olla).</p>
-        <label class="fld fld--wide"><span class="fld-l">Proveedor <em>*</em></span><select class="in" name="prov"><option value="">Elige…</option>
-          ${pc.length ? `<optgroup label="Concreto y bombeo">${pc.map(opt).join('')}</optgroup>` : ''}<optgroup label="Otros del directorio">${otros.map(opt).join('')}</optgroup></select></label>
-        <label class="fld fld--wide"><span class="fld-l">Qué cubre <em>*</em></span><select class="in" name="tipo">${tipos.map(t => `<option value="${t}"${t === sugerido ? ' selected' : ''}>${TIPO[t]}</option>`).join('')}</select>
-          <span class="fld-h">${necesitaBomba(c) ? 'Si el bombeo lo cotizó otro proveedor, registra esta como "Solo concreto" y después la del bombeo.' : 'Este colado es de tiro directo: no lleva bombeo.'}</span></label>
-        <label class="fld"><span class="fld-l">Total de la cotización <em>*</em></span><input class="in" name="total" type="number" min="0" step="0.01" inputmode="decimal"></label>
-        <label class="chk chk--wa" style="align-self:end"><input type="checkbox" name="iva" checked><span>El total incluye IVA (lleva factura)</span></label>
-        <label class="fld fld--wide"><span class="fld-l">Archivo de la cotización (PDF o foto)</span><input class="in" name="arch" type="file" accept="application/pdf,image/*" multiple><span class="fld-h">Se guarda en la carpeta privada de la obra y queda como la cotización de la compra.</span></label>
-        <label class="fld fld--wide"><span class="fld-l">Condiciones o notas</span><textarea class="in" name="cond" rows="2" placeholder="Precio por m³, forma de pago, vigencia…"></textarea></label>
-      </div></div>
-      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cancelar</span></button><button type="submit" class="btn btn--solid" data-ok${tipos.length ? '' : ' disabled'}>${I.check}<span>Guardar y crear compra</span></button></footer>
+      <div class="dr-b">
+        <p class="fld-h">Solo lo que ya aprobó Dirección. Cada cotización crea su compra, que sigue en Compras y facturas (pago, factura y remisiones de cada olla).</p>
+        ${modoLibre ? `<div class="fld"><span class="fld-l">¿Cómo vino la cotización?</span><div class="toggles">
+          <label class="chk chk--pill"><input type="radio" name="modo" value="ambos" checked><span>Una sola: concreto y bombeo</span></label>
+          <label class="chk chk--pill"><input type="radio" name="modo" value="separadas"><span>Separadas: concreto y bombeo</span></label></div></div>` : ''}
+        ${!bomba ? '<p class="muted small">Este colado es de tiro directo: solo lleva concreto.</p>' : fijo ? `<p class="muted small">Ya está registrada la del ${fijo === 'bombeo' ? 'concreto' : 'bombeo'}; falta la del ${fijo}.</p>` : ''}
+        ${modoLibre ? bloque('ambos', T2.ambos) + bloque('concreto', T2.concreto) + bloque('bombeo', T2.bombeo) : bloque(fijo, T2[fijo])}
+      </div>
+      <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cancelar</span></button><button type="submit" class="btn btn--solid" data-ok>${I.check}<span>Guardar y crear compra</span></button></footer>
     </form>`, { wide: true }, panel => {
-      const f = $('form', panel), err = $('[data-err]', panel);
+      const f = $('form', panel), err = $('[data-err]', panel), okb = $('[data-ok]', panel);
+      const modo = () => (modoLibre ? (f.querySelector('[name=modo]:checked') || {}).value : fijo);
+      const visibles = () => $$('[data-q]', panel).filter(b => !b.hidden);
+      const pintar = () => {
+        const m = modo();
+        $$('[data-q]', panel).forEach(b => { b.hidden = modoLibre && (m === 'separadas' ? b.dataset.q === 'ambos' : b.dataset.q !== 'ambos'); });
+        $('span', okb).textContent = visibles().length > 1 ? 'Guardar y crear las 2 compras' : 'Guardar y crear compra';
+      };
+      pintar();
+      f.addEventListener('change', e => { if (e.target.name === 'modo') pintar(); });
       f.addEventListener('input', api.markDirty);
       f.addEventListener('submit', async e => {
         e.preventDefault(); err.textContent = '';
-        const pid = f.prov.value, tipo = f.tipo.value, tot = num(f.total.value), iva = f.iva.checked;
-        if (!pid) { err.textContent = 'Elige el proveedor.'; return; }
-        if (!(tot > 0)) { err.textContent = 'Escribe el total de la cotización.'; return; }
-        if (!f.arch.files.length && !(await api.confirmar({ titulo: 'Sin archivo', texto: 'No subiste el archivo de la cotización. ¿Guardarla así? Lo puedes subir después en la compra.', ok: 'Guardar sin archivo' }))) return;
-        $('[data-ok]', panel).disabled = true;
-        const d = dirProv(pid) || {}, nombre = nombreProv(pid);
-        const subidos = []; let cid, qid;
+        const xs = visibles().map(b => ({ tipo: b.dataset.q, pid: $('[name=prov]', b).value, total: num($('[name=total]', b).value), iva: $('[name=iva]', b).checked,
+          files: [...$('[name=arch]', b).files], cond: $('[name=cond]', b).value.trim(), titulo: T2[b.dataset.q] }));
+        const sep = xs.length > 1, en = x => (sep ? ` del ${x.titulo.toLowerCase()}` : '');
+        for (const x of xs) {
+          if (!x.pid) { err.textContent = `Elige el proveedor${en(x)}.`; return; }
+          if (!(x.total > 0)) { err.textContent = `Escribe el total${en(x)}.`; return; }
+        }
+        if (sep && xs[0].pid === xs[1].pid) { err.textContent = 'Si el mismo proveedor cotizó las dos cosas, elige "Una sola: concreto y bombeo".'; return; }
+        const sinArch = xs.filter(x => !x.files.length);
+        if (sinArch.length && !(await api.confirmar({ titulo: 'Sin archivo', texto: `No subiste el archivo de la cotización${sep ? ' de: ' + sinArch.map(x => x.titulo.toLowerCase()).join(' y ') : ''}. ¿Guardar así? Lo puedes subir después en la compra.`, ok: 'Guardar sin archivo' }))) return;
+        okb.disabled = true;
+        const hechas = [];
         try {
-          for (const file of f.arch.files) subidos.push(await R.subirArchivo(c.obraId, 'colado-' + c.id, file));
-          const datos = { tipo, estado: 'recibida', total: tot, subtotal: iva ? Math.round(tot / 1.16 * 100) / 100 : tot, condiciones: f.cond.value.trim(), compra_ids: [],
-            archivos: subidos.map(({ ruta, nombre: n }) => ({ ruta, nombre: n })), proveedor: { nombre, rfc: d.rfc || '', razonSocial: d.razonSocial || '' } };
-          // Una por proveedor y colado: si quedó una vieja (solicitada o descartada) se reutiliza
-          const vieja = cotsDe(c).find(q => q.proveedorId === pid);
-          if (vieja && vieja.estado === 'elegida') throw new Error(`Ya está registrada la cotización de ${nombre}. Si cubre las dos cosas, quítala y regístrala como "Concreto y bombeo".`);
-          if (vieja) { ok(await sb().from('colado_cotizaciones').update(datos).eq('id', vieja.id).select('id')); qid = vieja.id; }
-          else qid = ok(await sb().from('colado_cotizaciones').insert(Object.assign({ colado_id: c.id, proveedor_id: pid }, datos)).select('id'))[0].id;
-          ok(await sb().from('colado_cotizaciones').update({ estado: 'elegida' }).eq('id', qid).select('id'));
-          cid = await R.crearCompra({ obraId: c.obraId, anio: c.anio, semana: c.semana, partidas: [], fechaEntrega: c.fecha, coladoId: c.id,
-            proveedor: { nombre, rfc: d.rfc || '', razonSocial: d.razonSocial || '', id: pid } });
-          await R.cargar();
-          await R.agregarDocumentoExistente(cid, 'cotizacion', { archivos: datos.archivos, fecha: today(), monto: tot });
-          if (!iva) await R.actualizarCompra(cid, { iva: false });
-          ok(await sb().from('colado_cotizaciones').update({ compra_ids: [cid] }).eq('id', qid).select('id'));
-        } catch (x) {
-          if (!cid) {   // no quedó compra: se deshace lo registrado
-            if (qid) await sb().from('colado_cotizaciones').update({ estado: 'descartada' }).eq('id', qid);
-            await R.borrarArchivos(subidos.map(s2 => s2.ruta)).catch(() => {});
+          for (const x of xs) { await registrarCot(c, x); hechas.push(x.titulo); }
+        } catch (x2) {
+          await cargar(true);
+          if (hechas.length) {   // la primera ya quedó: se cierra y se avisa qué falta
+            api.closeDrawer(true); api.rerender();
+            toast(`Se creó la compra del ${hechas[0].toLowerCase()}, pero la otra no: ${x2.message} Regístrala de nuevo.`);
+            return;
           }
-          $('[data-ok]', panel).disabled = false;
-          err.textContent = cid ? `La compra se creó, pero falta terminar: ${x.message}` : x.message;
-          await cargar(true); return;
+          okb.disabled = false; err.textContent = x2.message; return;
         }
         await cargar(true); api.closeDrawer(true);
-        toast(faltaCot(C.colados.find(x => x.id === c.id) || c) ? 'Compra creada. Falta registrar la otra cotización.' : 'Compra creada. Sigue en Compras y facturas: pago, factura y remisiones.');
+        toast(hechas.length > 1 ? 'Se crearon las 2 compras (concreto y bombeo). Siguen en Compras y facturas.'
+          : faltaCot(C.colados.find(y => y.id === c.id) || c) ? 'Compra creada. Falta registrar la otra cotización.' : 'Compra creada. Sigue en Compras y facturas: pago, factura y remisiones.');
         api.rerender();
       });
     });
