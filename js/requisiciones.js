@@ -1534,8 +1534,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     return {
       title: 'Obras',
       html: `<section class="page">
-        <header class="page-head rv"><div><p class="eyebrow">Cada obra con su residente</p><h1 class="title">Obras</h1></div></header>
-        <div class="note note--info rv" style="--d:60">${I.building}<p>El residente de cada obra (y su suplente mientras dure la suplencia) es el único que crea y envía sus requisiciones. ${esJefe() ? 'Para cambiar al residente usa <b>Cambiar residente</b> en la tarjeta; queda el historial. Toca la obra para editarla o asignar un suplente.' : esCoord() ? 'Toca una obra para asignar un suplente temporal.' : ''}</p></div>
+        <header class="page-head rv"><div><h1 class="title">Obras</h1></div></header>
+        <div class="note note--info note--ayuda rv" style="--d:60">${I.building}<p>El residente de cada obra (y su suplente mientras dure la suplencia) es el único que crea y envía sus requisiciones. ${esJefe() ? 'Para cambiar al residente usa <b>Cambiar residente</b> en la tarjeta; queda el historial. Toca la obra para editarla o asignar un suplente.' : esCoord() ? 'Toca una obra para asignar un suplente temporal.' : ''}</p></div>
         ${os.length ? `<div class="cards cards--amplias">${os.map((o, i) => {
           const rs = D.requisiciones.filter(r => r.obraId === o.id), cs = D.compras.filter(c => c.obraId === o.id && c.pago);
           const provs = DIR.filter(p => p.obras.some(x => norm(x) === norm(o.nombre)));
@@ -1581,8 +1581,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     return {
       title: 'Datos fiscales',
       html: `<section class="page">
-        <header class="page-head rv"><div><p class="eyebrow">A quién se le factura</p><h1 class="title">Datos fiscales</h1></div></header>
-        ${D.fiscalListo ? `<div class="note note--info rv" style="--d:60">${I.fiscal}<p>Las razones sociales de la empresa a las que los proveedores facturan. Cada compra dice a cuál se factura (la <b>predeterminada</b> si no se elige otra) y al leer el XML se revisa que la factura venga a una de estas. ${puede ? 'Con <b>Copiar datos</b> los mandas al proveedor por WhatsApp o correo.' : ''}</p></div>`
+        <header class="page-head rv"><div><h1 class="title">Datos fiscales</h1></div></header>
+        ${D.fiscalListo ? `<div class="note note--info note--ayuda rv" style="--d:60">${I.fiscal}<p>Las razones sociales de la empresa a las que los proveedores facturan. Cada compra dice a cuál se factura (la <b>predeterminada</b> si no se elige otra) y al leer el XML se revisa que la factura venga a una de estas. ${puede ? 'Con <b>Copiar datos</b> los mandas al proveedor por WhatsApp o correo.' : ''}</p></div>`
           : `<div class="note rv" style="--d:60">${I.alert}<p><b>Falta correr <span class="mono">supabase/07-datos-fiscales.sql</span> en Supabase.</b> Mientras, se usa la empresa de "Respaldo y datos" y no se pueden agregar razones sociales.</p></div>`}
         ${noReg.length && puede ? `<div class="note rv" style="--d:80">${I.alert}<p><b>${noReg.length === 1 ? 'Hay una factura' : 'Hay facturas'} a nombre de ${noReg.length === 1 ? 'un RFC que no está' : 'RFC que no están'} aquí:</b> ${noReg.map(x => `${esc(x.nombre || '')} <span class="mono">${esc(x.rfc)}</span>`).join(', ')}. Ábrela desde Compras para agregarla o pedir la corrección al proveedor.</p></div>` : ''}
         ${xs.length ? `<div class="cards cards--amplias">${xs.map((x, i) => `<article class="card wcard fcard rv${x.predeterminada ? ' is-mine' : ''}" style="--d:${100 + i * 60}">

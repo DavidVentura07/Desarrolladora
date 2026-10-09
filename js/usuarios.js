@@ -64,7 +64,7 @@
       title: 'Usuarios',
       html: `<section class="page">
         <header class="page-head rv"><div><p class="eyebrow">Configuración · solo Dirección y admin técnico</p><h1 class="title">Usuarios y permisos</h1></div></header>
-        <div class="note note--info rv" style="--d:60">${I.shield}<p><b>Cómo entra alguien nuevo:</b> invítalo con su correo y su rol. Luego entra a la plataforma, escribe ese correo y recibe un código de 6 dígitos. Solo entran los correos invitados. Para quitarle el acceso a alguien, edítalo y desactívalo; su historial se conserva.</p></div>
+        <div class="note note--info note--ayuda rv" style="--d:60">${I.shield}<p><b>Cómo entra alguien nuevo:</b> invítalo con su correo y su rol. Luego entra a la plataforma, escribe ese correo y recibe un código de 6 dígitos. Solo entran los correos invitados. Para quitarle el acceso a alguien, edítalo y desactívalo; su historial se conserva.</p></div>
 
         <div class="u-stats rv" style="--d:100">${ROLES.map(r => `<div><small>${esc(rolLabel(r.id))}</small><b>${cuenta(r.id)}</b></div>`).join('')}</div>
 
@@ -241,7 +241,7 @@
       title: 'Bitácora',
       html: `<section class="page">
         <header class="page-head rv"><div><p class="eyebrow">Solo Dirección y admin técnico</p><h1 class="title">Bitácora</h1></div></header>
-        <div class="note note--info rv" style="--d:60">${I.shield}<p>Cada cambio en la plataforma queda registrado: quién, qué y cuándo. Nadie puede editarla ni borrarla. Se muestran los últimos 300 movimientos con los filtros elegidos.</p></div>
+        <div class="note note--info note--ayuda rv" style="--d:60">${I.shield}<p>Cada cambio en la plataforma queda registrado: quién, qué y cuándo. Nadie puede editarla ni borrarla. Se muestran los últimos 300 movimientos con los filtros elegidos.</p></div>
         <div class="filterbar rv" style="--d:100">
           <label class="psel${BF.tabla ? ' on' : ''}"><span class="sr">Qué</span><select data-bf="tabla"><option value="">Todo</option>${Object.entries(TABLAS).map(([k, l]) => `<option value="${k}"${BF.tabla === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
           <label class="psel${BF.quien ? ' on' : ''}"><span class="sr">Quién</span><select data-bf="quien"><option value="">Todas las personas</option>${gente.map(g => `<option value="${esc(g.id)}"${BF.quien === g.id ? ' selected' : ''}>${esc(g.nombre || g.correo)}</option>`).join('')}</select></label>

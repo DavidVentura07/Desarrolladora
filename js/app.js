@@ -700,7 +700,7 @@
           </div>
         </header>
 
-        <div class="note note--info rv" style="--d:60">
+        <div class="note note--info note--ayuda rv" style="--d:60">
           ${I.db}
           <p>El directorio vive <b>en el servidor de la plataforma</b>: todos los que tienen acceso ven la misma información, desde cualquier computadora o celular. El plan gratuito del servidor no guarda copias automáticas, así que conviene <b>exportar un respaldo JSON</b> cada semana y guardarlo en Dropbox o Drive.</p>
         </div>
@@ -1480,7 +1480,7 @@
         <header class="page-head rv">
           <div><p class="eyebrow">Configuración</p><h1 class="title">Listas y opciones</h1></div>
         </header>
-        <div class="note note--info rv" style="--d:60">
+        <div class="note note--info note--ayuda rv" style="--d:60">
           ${I.listas}
           <p>${puedeDir() ? '' : '<b>Solo consulta:</b> tu rol puede ver estas listas, pero no modificarlas. '}Aquí se definen las opciones de los desplegables del formulario, a la medida de la oficina. Puedes <b>agregar</b>, <b>renombrar</b> (escribe sobre el nombre; se actualiza en todos los proveedores) y <b>quitar</b> opciones. También puedes hacerlo desde el formulario con el botón <b>Editar lista</b>. Las listas se guardan en el respaldo JSON.</p>
         </div>
@@ -1621,13 +1621,17 @@
     Object.assign(TITULOS, m.titulos || {}); Object.assign(ACCIONES, m.acciones || {});
   });
   function accionPrincipal(route) {
+    const vale = a => !!a && !((a.act === 'nuevo' && !puedeDir()) || (a.puede && !a.puede()));
     const a = ACCIONES[route] || ACCIONES[''];
-    const oculto = (a.act === 'nuevo' && !puedeDir()) || (a.puede && !a.puede());
+    // El "+" del centro de la barra inferior no se queda vacío: si en esta página no hay nada que crear,
+    // hace la acción más útil del rol (nueva requisición, nuevo colado o nuevo proveedor)
+    const alterna = vale(a) ? a : [ACCIONES.requisiciones, ACCIONES.colados, ACCIONES['']].find(vale);
     $$('[data-main-act]').forEach(b => {
-      b.hidden = oculto;
-      b.dataset.act = a.act;
-      b.setAttribute('aria-label', a.label);
-      const t = $('[data-main-label]', b); if (t) t.textContent = a.label;
+      const x = b.classList.contains('tab-add') ? (alterna || a) : a;
+      b.hidden = !vale(x);
+      b.dataset.act = x.act;
+      b.setAttribute('aria-label', x.label);
+      const t = $('[data-main-label]', b); if (t) t.textContent = x.label;
     });
   }
 
@@ -1648,8 +1652,23 @@
     document.body.dataset.page = r.page === 'p' ? 'ficha' : (route || 'lista');
     accionPrincipal(route);
     if (out.bind) out.bind(view.firstElementChild);
+    ayudas(view);
     if (keepScroll) { scrollTo(0, y); $$('.rv', view).forEach(e => e.classList.add('is-in')); }
     else { scrollTo(0, 0); reveal(view); }
+  }
+  // Recuadros de explicación (.note--ayuda): en celular se esconden detrás de un botón "i" para no saturar la pantalla
+  function ayudas(root) {
+    $$('.note--ayuda', root).forEach(n => {
+      if (n.previousElementSibling && n.previousElementSibling.classList.contains('ayuda-fila')) return;
+      n.insertAdjacentHTML('beforebegin', `<div class="ayuda-fila"><button type="button" class="ayuda-b" aria-expanded="false" aria-label="Información de esta sección"><span>Información</span><i aria-hidden="true">i</i></button></div>`);
+      const b = $('.ayuda-b', n.previousElementSibling);
+      b.addEventListener('click', () => {
+        const abre = !n.classList.contains('abierta');
+        n.classList.toggle('abierta', abre);
+        b.setAttribute('aria-expanded', abre);
+        $('i', b).textContent = abre ? '×' : 'i';
+      });
+    });
   }
   function rerender() { return render(parse(), true); }
 

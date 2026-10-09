@@ -282,7 +282,7 @@
       html: `<section class="page">
         <header class="page-head rv"><div><p class="eyebrow">Concreto premezclado y bombeo, por obra y semana</p><h1 class="title">Programación de colados</h1></div>
           <div class="col-hb">${editaListas() ? `<button class="tbtn" type="button" data-listas>${I.listas || I.list}<span>Listas de opciones</span></button>` : ''}</div></header>
-        <div class="note note--info rv" style="--d:60">${I.colado}<p>${rol() === 'compras' ? 'Aquí aparecen los colados que el coordinador ya aprobó. Manda la solicitud a los proveedores y registra la cotización que apruebe Dirección.'
+        <div class="note note--info note--ayuda rv" style="--d:60">${I.colado}<p>${rol() === 'compras' ? 'Aquí aparecen los colados que el coordinador ya aprobó. Manda la solicitud a los proveedores y registra la cotización que apruebe Dirección.'
           : 'El residente arma la solicitud y la guarda como <b>borrador</b>; cuando está seguro, la <b>envía al coordinador</b>, que la aprueba o la devuelve. Ya aprobada, compras pide las cotizaciones.'}</p></div>
         ${proximos.length ? `<div class="col-prox rv" style="--d:80"><b>${I.cal}Próximos colados aprobados</b>${proximos.slice(0, 4).map(c => `<a href="#/col/${esc(c.id)}"><span>${esc(fDateL(c.fecha))}${c.hora ? ' · ' + esc(c.hora) : ''}</span><em>${esc((obra(c.obraId) || {}).nombre || '')} · ${esc(c.elemento || 'Colado')} · ${m3(total(c))}</em></a>`).join('')}</div>` : ''}
         <div class="filterbar rv" style="--d:100">
