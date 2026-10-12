@@ -1749,6 +1749,12 @@ body[data-rol="direccion"] .solo-compras, body[data-rol="admin"] .solo-compras, 
 /* v0.12: separación de lo que va arriba de la cuadrícula del detalle (aviso, cotizaciones) y eventos */
 .col-sec { margin-bottom: 16px; }
 p.k-aviso.col-sec { margin: 0 0 12px; }
+/* v0.14: tipo de solicitud de colado (concreto y bombeo · solo concreto · solo bombeo) */
+.tagx--tipo { background: var(--lav); color: var(--blue); }
+.dr-form[data-tipo="bombeo"] .col-solo-k { display: none !important; }
+.dr-form:not([data-tipo="bombeo"]) .col-solo-b { display: none !important; }
+.dr-form[data-tipo="concreto"] [data-fs-bomba] { display: none; }
+.col-tipos { margin-bottom: 4px; }
 .col-ev { padding: 14px; margin-bottom: 14px; border: 1.5px solid var(--lav); border-radius: 22px; }
 .col-ev-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .col-ev-h b { font-size: 15px; color: var(--navy); }
