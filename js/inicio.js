@@ -86,7 +86,7 @@
             <div><b data-cnt="${c.proveedores}">0</b><small>Proveedores</small></div>
           </div>
         </div>
-        <div class="we-foot we-fx" style="--d:1100"><span>${nombre ? 'Hola, ' + esc(nombre) : ''}</span><span>v0.14 · en línea</span></div>
+        <div class="we-foot we-fx" style="--d:1100"><span>${nombre ? 'Hola, ' + esc(nombre) : ''}</span><span>v0.15 · en línea</span></div>
         <div class="we-ghost">${markSVG()}</div>
       </div>
       <div class="we-stage">
@@ -123,8 +123,9 @@
       cur = (i + P.length) % P.length;
       const s = document.createElement('div');
       s.className = 'we-slide';
+      // Cada franja se encima 1 px con la vecina: sin eso, el corte cae entre pixeles y se ve una línea (sobre todo en el celular)
       s.innerHTML = Array.from({ length: BANDS }, (_, k) =>
-        `<i style="--k:${k};--t:${k * 100 / BANDS}%;--b:${100 - (k + 1) * 100 / BANDS}%"><img src="${img(cur)}" alt=""></i>`).join('');
+        `<i style="--k:${k};--t:${k ? `calc(${k * 100 / BANDS}% - 1px)` : '0%'};--b:${k < BANDS - 1 ? `calc(${100 - (k + 1) * 100 / BANDS}% - 1px)` : '0%'}"><img src="${img(cur)}" alt=""></i>`).join('');
       stage.insertBefore(s, $('.we-top', stage));
       cap.classList.add('swap');
       const n = cur;
@@ -139,7 +140,7 @@
         void s.offsetWidth;   // fija el estado inicial para que la transición corra
         s.classList.add('show');
         const viejas = [...stage.querySelectorAll('.we-slide')].filter(x => x !== s);
-        setTimeout(() => viejas.forEach(v => v.remove()), 1500);
+        setTimeout(() => { viejas.forEach(v => v.remove()); s.classList.add('lleno'); }, 1500);   // ya entró: una sola imagen, sin cortes
         pintaThumbs();
         new Image().src = img((cur + 1) % P.length);  // precarga el siguiente
         clearTimeout(timer);

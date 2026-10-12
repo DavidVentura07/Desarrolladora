@@ -1477,6 +1477,7 @@ body[data-rol="direccion"] .solo-jefes, body[data-rol="admin"] .solo-jefes { dis
 .we-slide { position: absolute; inset: 0; }
 .we-slide > i { position: absolute; inset: 0; overflow: hidden; clip-path: inset(var(--t) 100% var(--b) 0); transition: clip-path 1s var(--ease); transition-delay: calc(var(--k) * 70ms); }
 .we-slide.show > i { clip-path: inset(var(--t) 0 var(--b) 0); }
+.we-slide.lleno > i { clip-path: none; transition: none; }   /* ya entró: sin cortes entre franjas */
 .we-slide img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.12); transition: transform 9s linear; }
 .we-slide.show img { transform: scale(1.02); }
 .we-stage::after { content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; background: linear-gradient(180deg, rgba(11,28,74,.35) 0%, transparent 28%, transparent 55%, rgba(11,28,74,.78) 100%); }
@@ -1721,6 +1722,8 @@ body[data-rol="direccion"] .solo-compras, body[data-rol="admin"] .solo-compras, 
 .col-av .ico { width: 30px; height: 30px; }
 .d-blk { display: block; }
 .col-k { padding: 14px; margin-bottom: 12px; border-radius: 18px; background: var(--bg); }
+.col-ev > [data-concretos] { margin-top: 16px; }   /* separa el bloque del concreto de los campos del evento */
+.col-k > .fld { margin-top: 12px; }   /* "Aditivos y especiales" no queda pegado al campo de arriba */
 .col-k-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .col-k-h b { font-size: 13.5px; }
 .col-k .in { background: var(--surface); }
