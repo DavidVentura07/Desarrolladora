@@ -654,7 +654,8 @@
   async function avisar(id, evento) {
     try {
       const x = await R.avisarRequisicion(id, evento);
-      if (!x || x.omitido) return;
+      if (!x) return;
+      if (x.omitido) { if (x.repetido) toast(x.motivo); return; }   // v0.16: la función no repite avisos
       toast(`Aviso enviado a ${avisoPara(x.aviso.para)}.${x.fallas && x.fallas.length ? ' Hubo problemas: ' + x.fallas.join(' · ') : ''}`);
       await cargar();
       if (location.hash === '#/r/' + id) api.rerender();
@@ -1201,6 +1202,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   async function avisarPago(cid) {
     try {
       const r = await R.avisarPago(cid);
+      if (r && r.omitido) { toast(r.motivo || 'No había a quién avisar.'); return false; }   // v0.16: la función no repite avisos
       toast(`Aviso enviado a ${avisoPara(r.aviso.para)}.${r.fallas && r.fallas.length ? ' Hubo problemas: ' + r.fallas.join(' · ') : ''}`);
       await cargar();
       return true;
@@ -2033,7 +2035,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   async function avisarCaja(id, evento) {
     try {
       const r = await R.avisarCaja(id, evento);
-      if (!r || r.omitido) return;
+      if (!r) return;
+      if (r.omitido) { if (r.repetido) toast(r.motivo); return; }   // v0.16: la función no repite avisos
       toast(`Aviso enviado a ${avisoPara(r.aviso.para)}.${r.fallas && r.fallas.length ? ' Hubo problemas: ' + r.fallas.join(' · ') : ''}`);
       await cargar();
       if (location.hash === '#/caja') api.rerender();
@@ -2059,8 +2062,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
           <label class="fld"><span class="fld-l">Obra</span><select class="in" name="obra"${nuevo && obras.length > 1 ? '' : ' disabled'}>${obras.map(o => `<option value="${esc(o.id)}">${esc(o.nombre)}</option>`).join('')}</select></label>
           <label class="fld"><span class="fld-l">Semana</span><input class="in" name="semana" type="number" min="1" max="53" value="${w.semana}"${deReq ? ' disabled' : ''}></label>
           <label class="fld fld--wide"><span class="fld-l">Concepto <em>*</em></span><input class="in" name="concepto" value="${esc(x.concepto)}" placeholder="Ej. cinta, clavos, brocas"${deReq && !esCompras() ? ' disabled' : ''}></label>
-          <label class="fld"><span class="fld-l">Cantidad</span><input class="in" name="cantidad" type="number" min="0" step="any" value="${esc(x.cantidad)}"></label>
-          <label class="fld"><span class="fld-l">Unidad</span><select class="in" name="unidad">${[...new Set([...UNIDADES, x.unidad].filter(Boolean))].map(u => `<option${u === x.unidad ? ' selected' : ''}>${esc(u)}</option>`).join('')}</select></label>
+          <label class="fld"><span class="fld-l">Cantidad</span><input class="in" name="cantidad" type="number" min="0" step="any" value="${esc(x.cantidad)}"${deReq && !esCompras() ? ' disabled' : ''}></label>
+          <label class="fld"><span class="fld-l">Unidad</span><select class="in" name="unidad"${deReq && !esCompras() ? ' disabled' : ''}>${[...new Set([...UNIDADES, x.unidad].filter(Boolean))].map(u => `<option${u === x.unidad ? ' selected' : ''}>${esc(u)}</option>`).join('')}</select></label>
         </div></div></fieldset>
         <fieldset class="fs"><legend><span class="mono">2</span>Nota o comprobante</legend><div class="fs-b"><div class="grid2">
           <label class="fld"><span class="fld-l">Monto total <em>*</em></span><input class="in" name="monto" type="number" min="0" step="0.01" value="${x.monto ? esc(x.monto) : ''}" inputmode="decimal"></label>
@@ -2086,7 +2089,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
         const g = Object.assign({}, k || {}, {
           obraId: k ? k.obraId : f.obra.value, anio: w.anio, semana: sem >= 1 && sem <= 53 ? sem : w.semana,
           concepto: f.concepto.value, cantidad: f.cantidad.value, unidad: f.unidad.value, monto, fecha: f.fecha.value, lugar: f.lugar.value,
-          comprobante: (f.querySelector('[name="comp"]:checked') || {}).value || 'nota', archivos: x.archivos
+          comprobante: (f.querySelector('[name="comp"]:checked') || {}).value || 'nota', archivos: x.archivos,
+          soloNota: deReq && !esCompras()   // v0.16: lo aprobado en la requisición no lo cambia el residente (la base tampoco lo deja)
         });
         ocupado(panel, true, 'Subiendo…');
         let gid;

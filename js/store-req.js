@@ -526,6 +526,7 @@
         const fila = { concepto: str(g.concepto).toUpperCase(), cantidad: num(g.cantidad), unidad: str(g.unidad), monto: num(g.monto), fecha: g.fecha || null,
           lugar: str(g.lugar), comprobante: g.comprobante || 'nota', archivos: [...arr(g.archivos), ...subidos.map(({ ruta, nombre }) => ({ ruta, nombre }))] };
         if (estado) fila.estado = estado;
+        if (g.id && g.soloNota) { delete fila.concepto; delete fila.cantidad; delete fila.unidad; }
         if (g.id) {
           const filas = ok(await sb().from('caja_chica').update(fila).eq('id', id).select('id'));
           if (!filas.length) throw new Error('Tu rol no puede modificar este gasto.');

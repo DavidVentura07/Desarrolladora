@@ -993,7 +993,7 @@
     try {
       const r = await sb().functions.invoke('aviso-fuerza', { body: { evento: 'cambios', obra_id: obraId } });
       if (r.error) throw await errFuncion(r, 'aviso-fuerza');
-      if (r.data.omitido) return;
+      if (r.data.omitido) { if (r.data.repetido) toast(r.data.motivo); return; }   // v0.16: la función no repite avisos
       toast(`Aviso enviado a ${r.data.aviso.para.map(p => `${p.nombre} (${canal(p)})`).join(', ')}.`);
     } catch (e) { toast(`Los cambios quedaron publicados, pero no salió el aviso: ${e.message}`); }
   }
@@ -1043,13 +1043,14 @@
     api.descargar(`Fuerza de trabajo ${o.nombre} ${UI.desde} a ${UI.hasta}.xls`.replace(/[\\/:*?"<>|#]+/g, ' '), '﻿' + html, 'application/vnd.ms-excel');
   }
 
-  // Enviar el reporte al gestor del IMSS (o a otro proveedor del directorio)
-  const esGestor = p => /imss|gestor|nómina|nomina|seguro social|recursos humanos/i.test([p.tipo, ...arr(p.categorias), ...arr(p.etiquetas), p.nombreComercial, p.nombre_comercial, p.razonSocial].join(' '));
+  // Enviar el reporte al gestor del IMSS. v0.16: SOLO a proveedores con tipo, categoría o etiqueta de gestor IMSS
+  // (trae CURP, NSS y salario); la función reporte-fuerza revisa lo mismo.
+  const esGestor = p => /imss|gestor|seguro social/i.test([p.tipo, ...arr(p.categorias), ...arr(p.etiquetas)].join(' '));
   const telsWa = ts => arr(ts).filter(t => t.whatsapp && String(t.numero).replace(/\D/g, '').length >= 10);
   async function drGestor(o) {
     await api.refresh();
-    const provs = api.proveedores().filter(p => p.estatus !== 'no_recomendado').sort((a, b) => (esGestor(b) - esGestor(a)) || api.nombreProveedor(a).localeCompare(api.nombreProveedor(b), 'es'));
-    const sugerido = provs.find(esGestor);
+    const provs = api.proveedores().filter(p => p.estatus !== 'no_recomendado' && esGestor(p)).sort((a, b) => api.nombreProveedor(a).localeCompare(api.nombreProveedor(b), 'es'));
+    const sugerido = provs[0];
     const ult = ultimoAviso(o.id, 'ft_reporte');
     const contactosDe = p => {
       if (!p) return '';
@@ -1063,9 +1064,9 @@
       <div class="dr-b">
         <p class="fld-h">Se arma el PDF con el logo (altas, bajas y cambios de salario del periodo con CURP, NSS y salario, y la plantilla) y se manda por correo a los contactos marcados; las respuestas te llegan a ti. A los que tienen WhatsApp se les manda con un clic al terminar. <b>Nunca lleva fotos.</b></p>
         ${ult ? `<div class="note note--info">${ic('send')}<p>Último envío: ${esc(fechaHora(ult.en))} · ${esc(paraTxt(ult))}.</p></div>` : ''}
-        ${!sugerido ? `<div class="note">${ic('alert')}<p>No encontré al gestor en el directorio. Dalo de alta como proveedor (con su correo y WhatsApp) y ponle el tipo o la categoría "Gestor IMSS". Mientras, puedes elegir cualquier proveedor.</p></div>` : ''}
-        <label class="fld"><span class="fld-l">Mandar a</span><select class="in" name="prov">${provs.map(p => `<option value="${esc(p.id)}"${sugerido && p.id === sugerido.id ? ' selected' : ''}>${esc(api.nombreProveedor(p))}${esGestor(p) ? ' · gestor' : ''}</option>`).join('')}</select></label>
-        <div class="ft-gk" data-cont>${contactosDe(sugerido || provs[0])}</div>
+        ${!sugerido ? `<div class="note">${ic('alert')}<p>No hay gestor del IMSS en el directorio. Dalo de alta como proveedor (con su correo y WhatsApp) y ponle el tipo o la categoría <b>"Gestor IMSS"</b>. El reporte lleva CURP, NSS y salario, así que solo se manda al gestor.</p></div>` : ''}
+        ${provs.length ? `<label class="fld"><span class="fld-l">Mandar a</span><select class="in" name="prov">${provs.map(p => `<option value="${esc(p.id)}"${sugerido && p.id === sugerido.id ? ' selected' : ''}>${esc(api.nombreProveedor(p))}</option>`).join('')}</select></label>
+        <div class="ft-gk" data-cont>${contactosDe(sugerido)}</div>` : ''}
         <label class="chk chk--wa"><input type="checkbox" name="asis" checked><span>Incluir la tabla de asistencia</span></label>
         <label class="fld"><span class="fld-l">Mensaje (opcional)</span><textarea class="in" name="nota" rows="3" maxlength="1000" placeholder="Por ejemplo: favor de dar de baja a Carlos Díaz a partir del 7 de octubre."></textarea></label>
         <div data-res></div>
@@ -1087,13 +1088,13 @@
         } catch (x) { okb.disabled = false; $('span', okb).textContent = 'Enviar'; err.textContent = x.message; return; }
         okb.hidden = true;
         const pila = (nombre, prov) => (!nombre || nombre === prov ? '' : ' ' + api.sinTitulo(nombre).split(' ')[0]);
-        const msg = (nombre, prov) => `Buen día${pila(nombre, prov)}. ${data.mensaje}${f.nota.value.trim() ? '\n' + f.nota.value.trim() : ''}\nPDF (la liga vence en 7 días): ${data.pdf_url}\nGracias. ${(N.perfil || {}).nombre || ''} · Galitha`;
+        const msg = (nombre, prov) => `Buen día${pila(nombre, prov)}. ${data.mensaje}${f.nota.value.trim() ? '\n' + f.nota.value.trim() : ''}\nPDF (la liga vence en 48 horas): ${data.pdf_url}\nGracias. ${(N.perfil || {}).nombre || ''} · Galitha`;
         res.innerHTML = `<div class="col-res"><h3>Resultado</h3>${data.resultados.map(r => `<div class="col-r"><b>${esc(r.nombre || '')}</b>
           ${r.correo_ok ? `<p class="ok">${ic('okc')}<span>Correo enviado a ${esc(r.correos.map(x => x.correo).join(', '))}</span></p>` : r.correos.length ? '' : '<p class="muted small">Sin correo marcado.</p>'}
           ${r.errores.map(x => `<p class="no">${ic('x')}<span>${esc(x)}</span></p>`).join('')}
           ${r.whatsapps.length ? `<div class="acts">${r.whatsapps.filter(w => String(w.telefono).length === 10).map(w => `<a class="btn btn--sm" target="_blank" rel="noopener" data-wa="${esc(r.proveedor_id)}" data-wap="${esc(r.nombre || '')}" data-wan="${esc(w.nombre)}" data-wat="${esc(w.telefono)}" href="https://wa.me/52${esc(w.telefono)}?text=${encodeURIComponent(msg(w.nombre, r.nombre))}">${ic('wa')}<span>WhatsApp a ${esc(w.nombre || w.telefono)}</span></a>`).join('')}</div>` : ''}
         </div>`).join('')}
-        <p class="muted small">PDF enviado: <a class="link-u" href="${esc(data.pdf_url)}" target="_blank" rel="noopener">abrir</a> (liga de 7 días).</p></div>`;
+        <p class="muted small">PDF enviado: <a class="link-u" href="${esc(data.pdf_url)}" target="_blank" rel="noopener">abrir</a> (liga de 48 horas).</p></div>`;
         $$('[data-wa]', res).forEach(a => a.addEventListener('click', async () => {
           try {
             ok(await sb().from('avisos').insert({ obra_id: o.id, evento: 'ft_reporte', para: [{ proveedorId: a.dataset.wa, proveedor: a.dataset.wap, nombre: a.dataset.wan, canal: 'whatsapp', telefono: a.dataset.wat, desde: UI.desde, hasta: UI.hasta }] }).select('id'));

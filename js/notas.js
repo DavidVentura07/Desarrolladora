@@ -229,6 +229,7 @@
   async function avisar(evento, id) {
     try {
       const d = await R.avisarNotas(evento, id);
+      if (d && d.repetido) toast(d.motivo);   // v0.16: la función no repite avisos
       if (d && d.aviso) toast(`Aviso enviado a ${d.aviso.para.map(p => p.nombre || p.correo).join(', ')}.`);
     } catch (e) { toast('Quedó guardado, pero no salió el aviso: ' + e.message); }
   }

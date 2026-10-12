@@ -227,6 +227,7 @@
         let msg = ''; try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
         throw new Error(msg || 'No se pudo mandar el aviso (¿está publicada la función "aviso-colado" en Supabase?).');
       }
+      if (data && data.omitido) { if (data.motivo) toast(data.motivo); return; }   // v0.16: la función no repite avisos
       toast(`Aviso enviado a ${avisoPara(data.aviso.para)}.`);
       await cargar();
       if (location.hash === '#/col/' + id || location.hash === '#/colados') api.rerender();
@@ -316,9 +317,11 @@
   // v0.11: en qué va la compra de un colado aprobado
   function chipCot(c) {
     if (c.estado !== 'aprobada' || !C.parte2) return '';
+    // v0.16: el residente no lee cotizaciones (sin precios); ve con quién se compró por la compra del colado
+    if (soloResidente()) { const ps = provsCompra(c); return ps.length ? `<span class="tagx tagx--ok">${esc(ps.join(' + '))}</span>` : ''; }
     const el = elegidas(c);
     if (el.length) return `<span class="tagx tagx--ok">${esc(el.map(q => nombreProv(q.proveedorId, q)).join(' + '))}</span>`;
-    return soloResidente() ? '' : '<span class="tagx tagx--wait">Sin cotización aprobada</span>';
+    return '<span class="tagx tagx--wait">Sin cotización aprobada</span>';
   }
   function tarjeta(c, d) {
     const o = obra(c.obraId) || {};
@@ -770,6 +773,7 @@
   const dirProv = id => api.proveedores().find(p => p.id === id);
   const nombreProv = (id, q) => { const d = dirProv(id); return d ? api.nombreProveedor(d) : (q && q.proveedor.nombre) || 'Proveedor'; };
   const comprasDe = c => C.compras.filter(x => x.coladoId === c.id);
+  const provsCompra = c => [...new Set(comprasDe(c).map(x => (x.proveedor && x.proveedor.nombre) || '').filter(Boolean))];
   // v0.12: solo se registran cotizaciones aprobadas por Dirección (quedan "elegida" y crean su compra)
   const elegidas = c => cotsDe(c).filter(q => q.estado === 'elegida');
   const necesitaBomba = c => tipoDe(c) !== 'concreto' && (c.bombeo === 'estacionaria' || c.bombeo === 'pluma');
@@ -798,8 +802,10 @@
     if (!C.parte2) return esComprasR() ? `<section class="panel col-sec rv"><div class="panel-b"><p class="muted small">Para registrar cotizaciones falta correr <span class="mono">supabase/09-colados-cotizaciones.sql</span> en Supabase.</p></div></section>` : '';
     const el = elegidas(c), compras = comprasDe(c);
     // El residente solo ve con quién se compró; los precios los manejan compras, coordinación y jefes
+    // (v0.16: la base ya no le manda las cotizaciones; el proveedor sale de la compra del colado)
     if (soloResidente()) {
-      return el.length ? `<section class="panel col-sec rv" style="--d:140"><header class="panel-h"><h2>Proveedor</h2></header><div class="panel-b"><ul class="tlist">${el.map(q => `<li class="tline"><span class="tmail">${esc(nombreProv(q.proveedorId, q))}</span><span class="tacts"><span class="tagx">${esc(TIPO[q.tipo])}</span></span></li>`).join('')}</ul></div></section>` : '';
+      const ps = provsCompra(c);
+      return ps.length ? `<section class="panel col-sec rv" style="--d:140"><header class="panel-h"><h2>Proveedor</h2></header><div class="panel-b"><ul class="tlist">${ps.map(n => `<li class="tline"><span class="tmail">${esc(n)}</span></li>`).join('')}</ul></div></section>` : '';
     }
     const sols = c.avisos.filter(a => a.evento === 'solicitud');
     const falta = c.estado === 'aprobada' && faltaCot(c);
