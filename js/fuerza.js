@@ -208,7 +208,7 @@
     const t = e.target.closest('[data-ftgrp-t]'); if (!t) return;
     e.preventDefault();
     const g = t.closest('[data-ftgrp]');
-    if (g.classList.contains('en')) g.classList.toggle('open'); else location.hash = t.getAttribute('href');   // fuera de sus páginas, abre Altas y bajas
+    g.classList.toggle('open');   // solo despliega; la cortina sale al elegir una opción
   });
   setTimeout(marcarGrupo, 0);
   async function pageFuerza() {   // #/fuerza (ligas viejas): manda a la página que corresponde

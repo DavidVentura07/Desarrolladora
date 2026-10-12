@@ -446,7 +446,7 @@
     const t = e.target.closest('[data-cpgrp-t]'); if (!t) return;
     e.preventDefault();
     const g = t.closest('[data-cpgrp]');
-    if (g.classList.contains('en')) g.classList.toggle('open'); else location.hash = t.getAttribute('href');
+    g.classList.toggle('open');   // solo despliega; la cortina sale al elegir una opción
   });
   setTimeout(marcarGrupo, 0);
   function chrome() {
