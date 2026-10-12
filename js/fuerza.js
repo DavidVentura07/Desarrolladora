@@ -90,9 +90,10 @@
     F.ini = [UI.desde, addDays(h, -7)].sort()[0];
     F.fin = [UI.hasta, h].sort()[1];
     const [ts, ds, ms, ps, ls, cf] = await Promise.all([
-      sb().from('trabajadores').select('*').order('nombre'),
-      sb().from('trabajador_datos').select('*').then(r => r, () => ({ data: [] })),
-      sb().from('trabajador_movimientos').select('*').order('en', { ascending: false }).limit(800).then(r => r, () => ({ data: [] })),
+      // v0.17: de 1,000 en 1,000 (los trabajadores nunca se borran; los movimientos se usan en reportes de cualquier periodo)
+      N.todo(() => sb().from('trabajadores').select('*').order('nombre').order('id')),
+      N.todo(() => sb().from('trabajador_datos').select('*').order('trabajador_id')).then(r => r, () => ({ data: [] })),
+      N.todo(() => sb().from('trabajador_movimientos').select('*').order('en', { ascending: false }).order('id')).then(r => r, () => ({ data: [] })),
       sb().from('pases_lista').select('*').gte('fecha', F.ini).lte('fecha', F.fin),
       sb().from('colado_listas').select('clave, valores').in('clave', Object.keys(LISTAS)),
       sb().from('config').select('valor').eq('clave', 'fuerza_trabajo'),
@@ -109,7 +110,17 @@
     F.limite = str((arr(cf.data)[0] || {}).valor && cf.data[0].valor.hora_limite) || '09:00';
     const ids = F.pases.map(p => p.id);
     if (ids.length) {
-      const [as, fs] = await Promise.all([sb().from('asistencias').select('*').in('pase_id', ids), sb().from('pase_fotos').select('*').in('pase_id', ids).then(r => r, () => ({ data: [] }))]);
+      // v0.17: un mes de marcas pasa fácil de 1,000 renglones (Supabase corta ahí): se piden de 100 pases en 100 y de 1,000 en 1,000
+      const porPases = async (tabla, orden) => {
+        const out = [];
+        for (let i = 0; i < ids.length; i += 100) {
+          const r = await N.todo(() => sb().from(tabla).select('*').in('pase_id', ids.slice(i, i + 100)).order('pase_id').order(orden));
+          if (r.error) return r;
+          out.push(...r.data);
+        }
+        return { data: out, error: null };
+      };
+      const [as, fs] = await Promise.all([porPases('asistencias', 'trabajador_id'), porPases('pase_fotos', 'id').then(r => r, () => ({ data: [] }))]);
       F.asis = arr(as.data).map(a => ({ paseId: a.pase_id, trabajadorId: a.trabajador_id, marca: a.marca, hora: str(a.hora), nota: str(a.nota) }));
       F.fotos = arr(fs.data).map(f => ({ id: f.id, paseId: f.pase_id, cuadrilla: str(f.cuadrilla), ruta: f.ruta, tomadaEn: f.tomada_en, subidaEn: f.subida_en,
         lat: num(f.lat), lng: num(f.lng), prec: num(f.precision_m), dist: num(f.distancia_m), fuera: f.fuera, hash: str(f.hash) }));

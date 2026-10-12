@@ -164,7 +164,7 @@
   let listasSrv = null; // listas tal como están guardadas en el servidor
 
   async function cargar() {
-    const filas = ok(await sb().from('proveedores').select('*, contactos(*)').order('nombre_comercial'));
+    const filas = ok(await window.Nube.todo(() => sb().from('proveedores').select('*, contactos(*)').order('nombre_comercial').order('id')));   // v0.17: de 1,000 en 1,000
     db = { proveedores: filas.map(deFila) };
     return db.proveedores;
   }
@@ -383,19 +383,14 @@
       };
     },
 
-    // modo 'combinar': agrega nuevos y conserva la versión más reciente de cada proveedor; las listas se suman
-    // modo 'reemplazar': borra todo y deja solo el contenido del archivo (también las listas, si el archivo las trae)
+    // Agrega nuevos y conserva la versión más reciente de cada proveedor; las listas se suman.
+    // v0.17: ya no existe "reemplazar" (borraba los proveedores y rompía sus ligas con compras, colados y notas).
     async importar(incoming, modo, listasArchivo) {
       permiso();
+      if (modo && modo !== 'combinar') throw new Error('Solo se puede combinar: el directorio ya no se reemplaza completo.');
       await cargar(); await cargarListas();
-      let subir = incoming.map(proveedor);
-      if (modo === 'reemplazar') {
-        if (!window.Nube.puede('restaurar')) throw new Error('Solo Dirección y el admin técnico pueden reemplazar todo el directorio.');
-        if (db.proveedores.length) ok(await sb().from('proveedores').delete().in('id', db.proveedores.map(p => p.id)).select('id'));
-      } else {
-        const actual = new Map(db.proveedores.map(p => [p.id, p]));
-        subir = subir.filter(p => !actual.has(p.id) || p.actualizadoEn >= actual.get(p.id).actualizadoEn);
-      }
+      const actual = new Map(db.proveedores.map(p => [p.id, p]));
+      const subir = incoming.map(proveedor).filter(p => !actual.has(p.id) || p.actualizadoEn >= actual.get(p.id).actualizadoEn);
       if (subir.length) {
         ok(await sb().from('proveedores').upsert(subir.map(p => aFila(p, true))).select('id'));
         const cs = subir.flatMap(p => p.contactos.map(c => aFilaContacto(p.id, c, true)));
@@ -403,8 +398,7 @@
       }
       if (listasArchivo) {
         for (const k of LISTAS) {
-          const vals = modo === 'reemplazar' ? listasArchivo[k] : [...listasSrv[k], ...listasArchivo[k]];
-          await escribirLista(k, vals);
+          await escribirLista(k, [...listasSrv[k], ...listasArchivo[k]]);
         }
       }
       await cargar();

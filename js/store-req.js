@@ -18,6 +18,7 @@
   const RESPALDO_KEY = 'galitha.requisiciones.respaldo';
 
   const sb = () => window.Nube.sb;
+  const todo = hacer => window.Nube.todo(hacer);   // v0.17: de 1,000 en 1,000
   const now = () => new Date().toISOString();
   const str = v => (v == null ? '' : String(v)).trim();
   const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
@@ -61,7 +62,8 @@
     revisadaPor: quien(p.revisada_por), revisadaEn: p.revisada_en || '', compraId: '',
     // v0.8: compras lo cambió por otro similar o no se pudo suministrar
     suministro: p.suministro || 'normal', sustituto: str(p.sustituto), notaSuministro: str(p.nota_suministro),
-    suministroPor: quien(p.suministro_por), suministroEn: p.suministro_en || ''
+    suministroPor: quien(p.suministro_por), suministroEn: p.suministro_en || '',
+    _v: p.actualizado_en || ''   // v0.17: última edición (para avisar si otra persona la cambió)
   });
 
   const deRequisicion = r => ({
@@ -74,7 +76,7 @@
     revisadaEn: r.revisada_en || '', revisadaPor: quien(r.revisada_por),
     partidas: arr(r.partidas).map(dePartida).sort((a, b) => a.orden - b.orden),
     avisos: [],      // correos automáticos de la requisición (v0.7, tabla avisos); se llenan en cargar()
-    actualizadoEn: r.actualizado_en
+    actualizadoEn: r.actualizado_en, _v: r.actualizado_en || ''
   });
 
   // Un documento de la compra (el más reciente de cada tipo)
@@ -154,20 +156,21 @@
     const [, obras, reqs, compras, config, hist, avisos, caja, fiscal, colados, pnMat, pnNotas, pnPagos] = await Promise.all([
       window.Nube.recargarPerfiles(),   // nombres de residentes, suplentes y de quién hizo cada cosa
       sb().from('obras').select('*, obra_suplentes(*)').order('nombre'),
-      sb().from('requisiciones').select('*, partidas(*)').order('anio', { ascending: false }).order('semana', { ascending: false }),
-      sb().from('compras').select('*, compra_partidas(partida_id), compra_documentos(*)'),
+      // v0.17: las tablas que crecen se piden de 1,000 en 1,000 (Supabase corta cada consulta en 1,000 renglones)
+      todo(() => sb().from('requisiciones').select('*, partidas(*)').order('anio', { ascending: false }).order('semana', { ascending: false }).order('id')),
+      todo(() => sb().from('compras').select('*, compra_partidas(partida_id), compra_documentos(*)').order('id')),
       sb().from('config').select('clave, valor'),
-      opcional(sb().from('obra_residentes').select('*').order('desde', { ascending: false })),
-      opcional(sb().from('avisos').select('*').order('en', { ascending: false })),
-      opcional(sb().from('caja_chica').select('*').order('creado_en')),
+      opcional(todo(() => sb().from('obra_residentes').select('*').order('desde', { ascending: false }).order('id'))),
+      opcional(todo(() => sb().from('avisos').select('*').order('en', { ascending: false }).order('id'))),
+      opcional(todo(() => sb().from('caja_chica').select('*').order('creado_en').order('id'))),
       // v0.10: si aún no se corre 07-datos-fiscales.sql, se usa la empresa de "Respaldo y datos"
       sb().from('datos_fiscales').select('*').order('nombre').then(r => r, e => ({ data: null, error: e })),
       // v0.11: datos mínimos de los colados para las compras que vienen de uno
-      opcional(sb().from('colados').select('id, obra_id, folio, fecha, hora, elemento, ubicacion, concretos, estado')),
+      opcional(todo(() => sb().from('colados').select('id, obra_id, folio, fecha, hora, elemento, ubicacion, concretos, estado').order('id'))),
       // v0.15: pago por notas (17-pago-por-notas.sql); sin correrlo, todo lo demás funciona igual
-      sb().from('pn_materiales').select('*').order('creado_en').then(r => r, e => ({ data: null, error: e })),
-      opcional(sb().from('pn_notas').select('*').order('fecha')),
-      opcional(sb().from('pn_pagos').select('*').order('fecha', { ascending: false }))
+      todo(() => sb().from('pn_materiales').select('*').order('creado_en').order('id')).then(r => r, e => ({ data: null, error: e })),
+      opcional(todo(() => sb().from('pn_notas').select('*').order('fecha').order('id'))),
+      opcional(todo(() => sb().from('pn_pagos').select('*').order('fecha', { ascending: false }).order('id')))
     ]);
     const d = {
       obras: ok(obras).map(deObra),
@@ -261,6 +264,48 @@
   async function borrarArchivos(rutas) {
     if (rutas.length) await sb().storage.from(BUCKET).remove(rutas);
   }
+  // v0.17: si falló por la red, la respuesta pudo perderse aunque el servidor sí guardó. Antes de borrar lo que se
+  // subió, se pregunta si ya hay un registro con ese archivo (si sí, el guardado salió bien y no se borra nada).
+  async function quedoGuardado(e, subidos, tabla, filtro, campo = 'archivos') {
+    if (!subidos.length || !window.Nube.esDeRed(e)) return false;
+    try {
+      let q = sb().from(tabla).select('id, ' + campo);
+      for (const [k, v] of Object.entries(filtro)) q = q.eq(k, v);
+      const r = await q;
+      const x = !r.error && arr(r.data).find(y => arr(y[campo]).some(a => a.ruta === subidos[0].ruta));
+      return x ? x.id : false;   // id del registro que sí quedó
+    } catch { return false; }
+  }
+
+  // Camino anterior por pasos (si aún no se corre 19-operaciones-completas.sql)
+  async function guardarPorPasos(r, partidas, opts = {}) {
+    const nueva = !(r.id && find('requisiciones', r.id));
+    const fila = { tipo: r.tipo === 'extraordinaria' ? 'extraordinaria' : 'ordinaria', folio: str(r.folio), fecha_suministro: r.fechaSuministro || null, nota: str(r.nota) };
+    if (nueva) {
+      r.id = r.id || uid();
+      ok(await sb().from('requisiciones').insert(Object.assign({ id: r.id, obra_id: r.obraId, anio: r.anio, semana: r.semana }, fila)).select('id'));
+    } else {
+      ok(await sb().from('requisiciones').update(fila).eq('id', r.id).select('id'));
+    }
+    const antes = nueva ? [] : find('requisiciones', r.id).partidas;
+    const quedan = new Set(partidas.filter(p => p.id).map(p => p.id));
+    const quitar = antes.filter(p => !quedan.has(p.id)).map(p => p.id);
+    if (quitar.length) ok(await sb().from('partidas').delete().in('id', quitar).select('id'));
+    const aFila = (p, i) => ({
+      orden: i, insumo: str(p.insumo), unidad: str(p.unidad), cantidad: num(p.cantidad), observaciones: str(p.observaciones),
+      destino: str(p.destino), fecha_suministro: p.fechaSuministro || null
+    });
+    const nuevas = [];
+    for (let i = 0; i < partidas.length; i++) {
+      const p = partidas[i], f = aFila(p, i), prev = p.id && antes.find(x => x.id === p.id);
+      if (!prev) { nuevas.push(Object.assign({ id: p.id || uid(), requisicion_id: r.id }, f, opts.aprobar ? { aprobacion: 'aprobada' } : {})); continue; }
+      const igual = prev.orden === i && prev.insumo === f.insumo && prev.unidad === f.unidad && prev.cantidad === f.cantidad
+        && prev.observaciones === f.observaciones && prev.destino === f.destino && (prev.fechaSuministro || null) === f.fecha_suministro;
+      if (!igual) ok(await sb().from('partidas').update(f).eq('id', p.id).select('id'));
+    }
+    if (nuevas.length) ok(await sb().from('partidas').insert(nuevas).select('id'));
+    return r.id;
+  }
 
   const find = (k, id) => db[k].find(x => x.id === id);
 
@@ -300,32 +345,20 @@
     /* Requisiciones: r = { id?, obraId, anio, semana, tipo, folio, fechaSuministro, nota }, partidas = [{ id?, insumo, … }] */
     // opts.aprobar: los materiales nuevos entran aprobados (corrección del admin técnico; la base lo vuelve a revisar)
     async guardarRequisicion(r, partidas, opts = {}) {
-      const nueva = !(r.id && find('requisiciones', r.id));
-      const fila = { tipo: r.tipo === 'extraordinaria' ? 'extraordinaria' : 'ordinaria', folio: str(r.folio), fecha_suministro: r.fechaSuministro || null, nota: str(r.nota) };
-      if (nueva) {
-        r.id = r.id || uid();
-        ok(await sb().from('requisiciones').insert(Object.assign({ id: r.id, obra_id: r.obraId, anio: r.anio, semana: r.semana }, fila)).select('id'));
-      } else {
-        ok(await sb().from('requisiciones').update(fila).eq('id', r.id).select('id'));
-      }
-      const antes = nueva ? [] : find('requisiciones', r.id).partidas;
-      const quedan = new Set(partidas.filter(p => p.id).map(p => p.id));
-      const quitar = antes.filter(p => !quedan.has(p.id)).map(p => p.id);
-      if (quitar.length) ok(await sb().from('partidas').delete().in('id', quitar).select('id'));
-      const aFila = (p, i) => ({
-        orden: i, insumo: str(p.insumo), unidad: str(p.unidad), cantidad: num(p.cantidad), observaciones: str(p.observaciones),
-        destino: str(p.destino), fecha_suministro: p.fechaSuministro || null
+      // v0.17 (19-operaciones-completas.sql): todo en una sola operación; avisa si otra persona la cambió mientras tanto
+      const previa = r.id && find('requisiciones', r.id);
+      const id0 = r.id || uid();
+      const ps = partidas.map(p => Object.assign({}, p, { id: p.id || uid() }));
+      const { data, error } = await sb().rpc('guardar_requisicion', {
+        p_req: { id: id0, obra_id: r.obraId, anio: r.anio, semana: r.semana, tipo: r.tipo, folio: str(r.folio), fecha_suministro: r.fechaSuministro || '', nota: str(r.nota) },
+        p_partidas: ps.map(p => ({ id: p.id, insumo: str(p.insumo), unidad: str(p.unidad), cantidad: num(p.cantidad), observaciones: str(p.observaciones),
+          destino: str(p.destino), fecha_suministro: p.fechaSuministro || '' })),
+        p_version: previa ? { req: previa._v, partidas: previa.partidas.map(p => ({ id: p.id, v: p._v })) } : null
       });
-      const nuevas = [];
-      for (let i = 0; i < partidas.length; i++) {
-        const p = partidas[i], f = aFila(p, i), prev = p.id && antes.find(x => x.id === p.id);
-        if (!prev) { nuevas.push(Object.assign({ id: p.id || uid(), requisicion_id: r.id }, f, opts.aprobar ? { aprobacion: 'aprobada' } : {})); continue; }
-        const igual = prev.orden === i && prev.insumo === f.insumo && prev.unidad === f.unidad && prev.cantidad === f.cantidad
-          && prev.observaciones === f.observaciones && prev.destino === f.destino && (prev.fechaSuministro || null) === f.fecha_suministro;
-        if (!igual) ok(await sb().from('partidas').update(f).eq('id', p.id).select('id'));
-      }
-      if (nuevas.length) ok(await sb().from('partidas').insert(nuevas).select('id'));
-      return r.id;
+      if (!error) { r.id = data || id0; return r.id; }
+      if (!/guardar_requisicion|PGRST202|could not find the function/i.test(String(error.message || '') + (error.code || ''))) throw new Error(window.Nube.traducir(error));
+      // Sin el SQL 19: el camino anterior (por pasos)
+      return guardarPorPasos(r, partidas, opts);
     },
     async cambiarEstado(id, estado, comentario) {
       const f = { estado };
@@ -391,6 +424,11 @@
       };
       if (c.facturarA) fila.facturar_a = c.facturarA;   // v0.10; sin elegir, la base pone la predeterminada
       if (c.coladoId) fila.colado_id = c.coladoId;       // v0.11: compra de un colado
+      // v0.17 (19-operaciones-completas.sql): compra y materiales juntos; si un material no se puede, no queda una compra vacía
+      const rpc = await sb().rpc('crear_compra', { p_compra: fila, p_partidas: c.partidas || [] });
+      if (!rpc.error) return rpc.data || id;
+      if (!/crear_compra|PGRST202|could not find the function/i.test(String(rpc.error.message || '') + (rpc.error.code || ''))) throw new Error(window.Nube.traducir(rpc.error));
+      // Sin el SQL 19: el camino anterior (por pasos)
       ok(await sb().from('compras').insert(fila).select('id'));
       if (!c.partidas || !c.partidas.length) return id;   // las de colado no llevan materiales
       try {
@@ -424,14 +462,15 @@
     async agregarDocumento(compraId, tipo, { archivos = [], fecha: f, monto, referencia, nota, datos } = {}) {
       const c = find('compras', compraId);
       if (!c) throw new Error('No se encontró la compra.');
-      const subidos = [];
+      const subidos = [], id = uid();
       try {
         for (const a of archivos) subidos.push(await subirArchivo(c.obraId, compraId, a));
         ok(await sb().from('compra_documentos').insert({
-          compra_id: compraId, tipo, archivos: subidos.map(({ ruta, nombre }) => ({ ruta, nombre })),
+          id, compra_id: compraId, tipo, archivos: subidos.map(({ ruta, nombre }) => ({ ruta, nombre })),
           fecha: f || null, monto: monto == null || monto === '' ? null : num(monto), referencia: str(referencia), nota: str(nota), datos: datos || {}
         }).select('id'));
       } catch (e) {
+        if (await quedoGuardado(e, subidos, 'compra_documentos', { id })) return;
         await borrarArchivos(subidos.map(s => s.ruta)).catch(() => {});
         throw e;
       }
@@ -454,6 +493,7 @@
         const filas = ok(await sb().from('compra_documentos').update({ archivos: [...arr(actual.archivos), ...subidos.map(({ ruta, nombre }) => ({ ruta, nombre }))] }).eq('id', docId).select('id'));
         if (!filas.length) throw new Error('Tu rol no puede agregar fotos a esta remisión (falta correr 07-datos-fiscales.sql en Supabase).');
       } catch (e) {
+        if (await quedoGuardado(e, subidos, 'compra_documentos', { id: docId })) return;
         await borrarArchivos(subidos.map(x => x.ruta)).catch(() => {});
         throw e;
       }
@@ -534,6 +574,7 @@
           ok(await sb().from('caja_chica').insert(Object.assign({ id, obra_id: g.obraId, anio: g.anio, semana: g.semana, origen: 'directo' }, fila)).select('id'));
         }
       } catch (e) {
+        if (await quedoGuardado(e, subidos, 'caja_chica', { id })) return id;
         await borrarArchivos(subidos.map(x => x.ruta)).catch(() => {});
         throw e;
       }
@@ -580,6 +621,7 @@
           ok(await sb().from('pn_notas').insert(Object.assign({ id, material_id: n.materialId, obra_id: n.obraId }, fila)).select('id'));
         }
       } catch (e) {
+        if (await quedoGuardado(e, subidos, 'pn_notas', { id })) return id;
         await borrarArchivos(subidos.map(x => x.ruta)).catch(() => {});
         throw e;
       }
@@ -606,6 +648,9 @@
         if (error) throw new Error(window.Nube.traducir(error));
         return data;
       } catch (e) {
+        // el pago se busca entre los de la obra por su comprobante
+        const quedo = await quedoGuardado(e, subidos, 'pn_pagos', { obra_id: p.obraId });
+        if (quedo) return quedo;
         await borrarArchivos(subidos.map(x => x.ruta)).catch(() => {});
         throw e;
       }
@@ -649,6 +694,7 @@
           if (!filas.length) throw new Error('Tu rol no puede editar datos fiscales.');
         }
       } catch (e) {
+        if (subido && await quedoGuardado(e, [subido], 'datos_fiscales', { id }, 'constancia')) return id;
         if (subido) await borrarArchivos([subido.ruta]).catch(() => {});
         throw e;
       }

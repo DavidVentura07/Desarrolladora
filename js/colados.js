@@ -147,11 +147,12 @@
     const s = s0.obras.length && !fresco ? s0 : await R.cargar().catch(() => s0);
     C.obras = s.obras;
     const [cs, ls, av, qs] = await Promise.all([
-      sb().from('colados').select('*').order('fecha', { ascending: false }),
+      // v0.17: de 1,000 en 1,000 (Supabase corta cada consulta en 1,000 renglones)
+      N.todo(() => sb().from('colados').select('*').order('fecha', { ascending: false }).order('id')),
       sb().from('colado_listas').select('clave, valores'),
-      sb().from('avisos').select('*').not('colado_id', 'is', null).order('en', { ascending: false }).then(r => r, () => ({ data: [] })),
+      N.todo(() => sb().from('avisos').select('*').not('colado_id', 'is', null).order('en', { ascending: false }).order('id')).then(r => r, () => ({ data: [] })),
       // v0.11 (09-colados-cotizaciones.sql); sin correrlo, la parte 1 sigue funcionando
-      sb().from('colado_cotizaciones').select('*').order('solicitada_en').then(r => r, e => ({ data: null, error: e }))
+      N.todo(() => sb().from('colado_cotizaciones').select('*').order('solicitada_en').order('id')).then(r => r, e => ({ data: null, error: e }))
     ]);
     if (cs.error) { C.listo = false; C.colados = []; C.error = cs.error.message; return C; }
     C.listo = true; C.error = '';

@@ -760,11 +760,10 @@
           if (act === 'export-csv') exportarCSV();
           if (act === 'importar') {
             if (!pendienteImport) return;
-            const modo = b.dataset.modo;
-            if (modo === 'reemplazar' && !(await confirmar({ titulo: 'Reemplazar todo', texto: `Los <b>${DATA.length}</b> proveedores del servidor se borrarán y quedarán solo los <b>${pendienteImport.total}</b> del archivo, <b>para todos los usuarios</b>.`, ok: 'Reemplazar', peligro: true, escribir: 'REEMPLAZAR' }))) return;
+            // v0.17: solo "Combinar" (Reemplazar todo borraba los proveedores y rompía sus ligas con compras, colados y notas)
             try {
-              await S.importar(pendienteImport.incoming, modo, pendienteImport.listas);
-              toast(modo === 'reemplazar' ? 'Datos reemplazados.' : 'Importación completada.');
+              await S.importar(pendienteImport.incoming, 'combinar', pendienteImport.listas);
+              toast('Importación completada.');
               pendienteImport = null; rerender();
             } catch (err) { toast('No se pudo guardar: ' + err.message); }
           }
@@ -790,7 +789,7 @@
         <div class="imp">
           <p class="mono imp-f">${esc(f.name)}${a.exportadoEn ? ` · exportado ${esc(fmtDate(a.exportadoEn))}` : ''}</p>
           ${a.otraApp ? `<p class="warn">${I.alert}Este archivo parece venir de otra aplicación. Revisa el resultado.</p>` : ''}
-          ${a.listas ? '<p class="muted small">Incluye listas de opciones: al combinar se suman a las tuyas; al reemplazar, sustituyen a las tuyas.</p>' : ''}
+          ${a.listas ? '<p class="muted small">Incluye listas de opciones: se suman a las tuyas.</p>' : ''}
           <ul class="imp-n">
             <li><b>${a.total}</b><span>en el archivo</span></li>
             <li><b>${a.nuevos}</b><span>nuevos</span></li>
@@ -800,10 +799,9 @@
           </ul>
           <div class="acts">
             <button class="btn btn--solid" data-act="importar" data-modo="combinar"><span>Combinar</span>${ARR}</button>
-            ${N.puede('restaurar') ? '<button class="btn btn--danger" data-act="importar" data-modo="reemplazar"><span>Reemplazar todo</span></button>' : ''}
             <button class="link-u mono" data-act="cancelar-import">Cancelar</button>
           </div>
-          <p class="muted small"><b>Combinar</b> agrega los nuevos y, si un proveedor existe en ambos lados, conserva la versión editada más recientemente. ${N.puede('restaurar') ? '<b>Reemplazar</b> borra lo actual y deja solo lo del archivo.' : ''}</p>
+          <p class="muted small"><b>Combinar</b> agrega los nuevos y, si un proveedor existe en ambos lados, conserva la versión editada más recientemente. Nunca borra proveedores: para quitar uno, bórralo desde su ficha.</p>
         </div>`;
     };
     reader.onerror = () => { out.innerHTML = `<p class="warn">${I.alert}No se pudo leer el archivo.</p>`; };

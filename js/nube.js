@@ -26,9 +26,44 @@
     usuarios: ['direccion', 'admin']
   };
 
+  // v0.17: cada petición tiene tiempo límite (con mala señal en obra se quedaba colgada) y las lecturas se reintentan una vez
+  const LIMITE_MS = url => (/\/storage\/v1\/object\/|\/functions\/v1\//.test(url) ? 120e3 : 30e3);
+  async function fetchConLimite(input, init = {}) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const metodo = String(init.method || (input && input.method) || 'GET').toUpperCase();
+    const intentos = metodo === 'GET' || metodo === 'HEAD' ? 2 : 1;
+    for (let i = 0; ; i++) {
+      const ctl = new AbortController();
+      let agotado = false;
+      const t = setTimeout(() => { agotado = true; ctl.abort(); }, LIMITE_MS(url));
+      if (init.signal) { if (init.signal.aborted) ctl.abort(); else init.signal.addEventListener('abort', () => ctl.abort(), { once: true }); }
+      try { return await fetch(input, Object.assign({}, init, { signal: ctl.signal })); }
+      catch (e) {
+        if (i + 1 >= intentos) throw agotado ? new Error('Tiempo de espera agotado') : e;
+        await new Promise(r => setTimeout(r, 1500));
+      } finally { clearTimeout(t); }
+    }
+  }
+
   const sb = window.supabase.createClient(URL_PROYECTO, CLAVE_PUBLICA, {
-    auth: { flowType: 'pkce', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    auth: { flowType: 'pkce', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    global: { fetch: fetchConLimite }
   });
+
+  // v0.17: Supabase entrega máximo 1,000 renglones por consulta; esto pide de 1,000 en 1,000 hasta traer todo.
+  // hacer = () => consulta nueva (con un orden estable, p. ej. terminando en .order('id')). Devuelve { data, error } como una consulta normal.
+  async function todo(hacer, paso = 1000) {
+    const out = [];
+    for (let i = 0; ; i += paso) {
+      const r = await hacer().range(i, i + paso - 1);
+      if (r.error) return { data: null, error: r.error };
+      const filas = r.data || [];
+      out.push(...filas);
+      if (filas.length < paso) return { data: out, error: null };
+    }
+  }
+  // ¿El error es de la red (sin señal, servidor que no responde) y no de permisos?
+  const esDeRed = err => !navigator.onLine || /failed to fetch|network|load failed|tiempo de espera|aborterror|timeout|fetch|señal|sin conexión/i.test(String((err && (err.message || err)) || ''));
 
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   const MAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -40,6 +75,18 @@
   function traducir(err) {
     const m = String((err && (err.message || err.error_description || err)) || '');
     if (/galitha/i.test(m)) return m;                         // mensajes propios (candado de invitaciones, triggers)
+    // v0.17: sesión vencida a media acción, señal débil y choques conocidos de la base, en palabras de la oficina
+    if (/jwt/i.test(m)) return 'Tu sesión se renovó; vuelve a intentarlo.';
+    if (/tiempo de espera|aborterror|timed? ?out/i.test(m)) return 'La señal está muy débil o el servidor no respondió. Vuelve a intentarlo.';
+    if (/requisiciones_una_ordinaria/.test(m)) return 'Ya hay una requisición ordinaria de esta obra en esa semana. Lo que falte va en una extraordinaria.';
+    if (/colados_folio/.test(m)) return 'Ya existe un colado con ese folio en la obra.';
+    if (/factura_uuid_unico/.test(m)) return 'Esa factura (mismo UUID) ya está registrada en otra compra.';
+    if (/compra_partidas_pkey/.test(m)) return 'Alguno de esos materiales ya está en otra compra. Recarga la página.';
+    if (/caja_chica_partida_id_key/.test(m)) return 'Ese material ya está en caja chica. Recarga la página.';
+    if (/pn_materiales_partida_id_key/.test(m)) return 'Ese material ya está en pago por notas. Recarga la página.';
+    if (/pases_lista_obra_fecha/.test(m)) return 'Ya se pasó lista hoy en esta obra.';
+    if (/duplicate key/i.test(m)) return 'Ese registro ya existe (quizá ya se había guardado). Recarga la página para verlo.';
+    if (/violates foreign key/i.test(m)) return 'Está ligado a otros datos y no se puede quitar.';
     if (/row-level security|permission denied/i.test(m)) return 'Tu rol no tiene permiso para esta acción.';
     if (/rate limit|too many|security purposes/i.test(m)) return 'Se pidieron demasiados accesos seguidos. Espera unos minutos y vuelve a intentarlo.';
     if (/expired|invalid.*(otp|token)|token.*invalid/i.test(m)) return 'El código o la liga ya venció o no es correcto. Pide uno nuevo.';
@@ -209,6 +256,8 @@
     for (;;) {
       if (!session) session = await pantallaAcceso(aviso);
       const { data, error } = await sb.rpc('mi_perfil');
+      // v0.17: sin señal NO se cierra la sesión (si no, había que pedir otro código por correo); se ofrece reintentar
+      if (error && esDeRed(error)) { await pantallaSinRed(); continue; }
       if (error) { aviso = traducir(error); await sb.auth.signOut(); session = null; continue; }
       if (!data || !data.id || !data.activo) {
         aviso = `El correo ${session.user.email} no tiene acceso a la plataforma. Pide una invitación al administrador.`;
@@ -220,18 +269,57 @@
     try { await cargarPerfiles(); } catch { perfiles.set(perfil.id, perfil); }
     cerrarAcceso();
 
-    // Si la sesión se cierra (en esta u otra pestaña), se vuelve a la pantalla de acceso
-    sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT') location.reload(); });
+    // Si la sesión se cierra (en esta u otra pestaña, o no se pudo renovar), se avisa antes de volver a la pantalla de acceso
+    sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT') sesionCerrada(); });
     return perfil;
   }
 
+  // v0.17: pantalla "Sin conexión" al abrir la app (conserva la sesión); sigue sola cuando regresa la señal
+  function pantallaSinRed() {
+    return new Promise(resolve => {
+      document.getElementById('login')?.remove();
+      const el = document.createElement('div');
+      el.id = 'login';
+      el.innerHTML = `
+        <div class="lg-brand"><span class="lg-deco">${MARCA}</span><div class="lg-mark">${MARCA}</div>
+          <div><p class="lg-eyebrow">Galitha · Plataforma interna</p><h1>Sin conexión</h1></div></div>
+        <div class="lg-side"><form class="lg-card" novalidate>
+          <h2>No hay conexión con el servidor</h2>
+          <p class="lg-sub">Revisa la señal o el wifi. <b>Tu sesión sigue abierta</b>: no necesitas otro código.</p>
+          <button class="btn btn--solid lg-go" type="submit"><span>Reintentar</span></button>
+        </form></div>`;
+      document.body.appendChild(el);
+      document.body.classList.add('login-open');
+      const listo = () => { window.removeEventListener('online', listo); el.remove(); document.body.classList.remove('login-open'); resolve(); };
+      el.querySelector('form').addEventListener('submit', e => { e.preventDefault(); listo(); });
+      window.addEventListener('online', listo);
+    });
+  }
+
+  // v0.17: la sesión se cerró sin que la persona lo pidiera: se avisa en vez de recargar de golpe (podía perder lo capturado)
+  let saliendo = false;
+  function sesionCerrada() {
+    if (saliendo) { location.reload(); return; }
+    if (document.getElementById('sesion-cerrada')) return;
+    const el = document.createElement('div');
+    el.id = 'sesion-cerrada';
+    el.setAttribute('role', 'alertdialog');
+    el.style.cssText = 'position:fixed;inset:0;z-index:400;display:grid;place-items:center;padding:16px;background:rgba(11,28,74,.55)';
+    el.innerHTML = `<div style="max-width:420px;background:#fff;color:#101530;border-radius:24px;padding:26px 24px;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <h2 style="margin:0 0 8px;font-size:20px">Tu sesión se cerró</h2>
+      <p style="margin:0 0 18px;line-height:1.5">Puede ser que se cerró en otra pestaña o que pasó mucho tiempo sin conexión. Si estabas capturando algo, cópialo antes de continuar; después tendrás que entrar otra vez.</p>
+      <button class="btn btn--solid" type="button"><span>Entrar otra vez</span></button></div>`;
+    el.querySelector('button').addEventListener('click', () => location.reload());
+    document.body.appendChild(el);
+  }
+
   window.Nube = {
-    sb, ROLES, traducir, iniciar,
+    sb, ROLES, traducir, iniciar, todo, esDeRed,
     get perfil() { return perfil; },
     puede(accion) { return !!perfil && (PERMISOS[accion] || []).includes(perfil.rol); },
     nombreDe(id) { const p = id && perfiles.get(id); return p ? (p.nombre || p.correo) : ''; },
     perfiles: () => [...perfiles.values()],
     async recargarPerfiles() { try { await cargarPerfiles(); } catch { /* se queda con la lista anterior */ } },
-    async salir() { await sb.auth.signOut(); location.reload(); }
+    async salir() { saliendo = true; await sb.auth.signOut(); location.reload(); }
   };
 })();
