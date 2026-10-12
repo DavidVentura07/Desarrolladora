@@ -19,7 +19,7 @@
    Reglas en supabase/12-fuerza-trabajo.sql.
    Partes 2 y 3 (14-fuerza-avisos.sql): "Publicar cambios" llama a la Edge Function "aviso-fuerza"
    (WhatsApp/correo a Dirección, admin y coordinador; la misma función avisa sola, con pg_cron, cuando
-   pasa la hora límite sin pase de lista). En Registro: PDF con logo y PDF interno con fotos (Edge Function
+   pasa la hora límite sin pase de lista). En Historial: PDF con logo y PDF interno con fotos (Edge Function
    "reporte-fuerza"), Excel, y "Enviar al gestor IMSS" (correo con el PDF + WhatsApp con un clic).
    ========================================================= */
 (window.GALITHA_MODULOS = window.GALITHA_MODULOS || []).push(api => {
@@ -150,7 +150,7 @@
   const UI = Object.assign({ obra: '', desde: addDays(lunesDe(hoy()), -21), hasta: addDays(lunesDe(hoy()), 5) },
     (() => { try { return JSON.parse(sessionStorage.getItem('galitha.ft.ui')) || {}; } catch { return {}; } })());
   const saveUI = () => { try { sessionStorage.setItem('galitha.ft.ui', JSON.stringify(UI)); } catch { /* sin acceso */ } };
-  const TITULO = { 'ft-altas': 'Altas y bajas', 'ft-pase': 'Pase de lista', 'ft-registro': 'Registro de asistencia' };
+  const TITULO = { 'ft-altas': 'Altas y bajas', 'ft-pase': 'Pase de lista', 'ft-registro': 'Historial de asistencia' };
 
   const vacia = (titulo, h2, texto) => ({ title: titulo, html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">${h2}</h2><p class="muted">${texto}</p></div></section>`, bind() { } });
   function sinTabla() { return vacia('Fuerza de trabajo', 'Falta preparar el servidor', 'Para usar la fuerza de trabajo hay que correr <span class="mono">supabase/12-fuerza-trabajo.sql</span> en Supabase.'); }
@@ -363,7 +363,7 @@
     if (p && p.estado === 'no_labora') return pagina(heroHTML(eyebrow, 'Hoy no se<br>labora', `<span class="h-count">Registrado por <b>${esc(p.por)}</b> a las ${esc(horaMX(p.en))}</span><span class="pill">Cuenta como el pase de lista de hoy</span>`,
       sqHTML('lav', 'Motivo', `<span class="sq-txt">${esc(p.motivo.split(':')[0])}</span>`, esc(p.motivo.split(':').slice(1).join(':').trim() || 'Sin detalle'))
       + sqHTML('sun', 'Trabajadores<br>en la obra', total, 'no se les marca falta este día', 140))
-      + `<div class="note note--info rv">${ic('cal')}<p>Este día aparece en gris en el Registro y no genera aviso de "pase no enviado".${esJefe() ? ' Si fue un error, bórralo desde el Registro (detalle del día) para que se pueda pasar lista.' : ''}</p></div>`);
+      + `<div class="note note--info rv">${ic('cal')}<p>Este día aparece en gris en el Historial y no genera aviso de "pase no enviado".${esJefe() ? ' Si fue un error, bórralo desde el Historial (detalle del día) para que se pueda pasar lista.' : ''}</p></div>`);
 
     // Ya enviado: solo lectura
     if (p) {
@@ -891,10 +891,10 @@
     };
     const tot = (t, f) => dias.reduce((n, d, i) => { const p = est[i].p; const a = p && F.asis.find(x => x.paseId === p.id && x.trabajadorId === t.id); return n + (a && f(a.marca) ? 1 : 0); }, 0);
     return {
-      title: 'Registro de asistencia',
+      title: 'Historial de asistencia',
       html: `<section class="page ft">
         ${barraObras('ft-registro')}
-        ${heroHTML(`${esc(o.nombre)} · residente ${esc(residenteDe(o))} · del ${esc(fFecha(UI.desde))} al ${esc(fFecha(UI.hasta))}`, 'Registro de<br>asistencia',
+        ${heroHTML(`${esc(o.nombre)} · residente ${esc(residenteDe(o))} · del ${esc(fFecha(UI.desde))} al ${esc(fFecha(UI.hasta))}`, 'Historial de<br>asistencia',
           `<span class="h-count"><b>${st.lab}</b> ${st.lab === 1 ? 'día laboral' : 'días laborales'} · <b>${st.env}</b> ${st.env === 1 ? 'pase enviado' : 'pases enviados'}</span><span class="pill">${u ? 'Último envío al gestor: ' + esc(fMes(FMX.format(new Date(u.en)))) : 'Aún no se manda al gestor'}</span>`,
           sqHTML('ok', 'Pases a<br>tiempo', `${st.ok}<span class="sq-de">/${st.env}</span>`, st.late ? `${st.late} ${st.late === 1 ? 'llegó' : 'llegaron'} después de las ${esc(F.limite)}` : 'Ninguno fuera de hora')
           + sqHTML(st.no ? 'bad' : 'ok', 'Días sin<br>pase de lista', st.no, st.no ? 'se avisó a la oficina cada día' : 'Ningún día sin pase', 140))}
@@ -949,15 +949,15 @@
       return minHM(horaMX()) > minHM(F.limite) ? ['bad', 'Sin pase · ya pasó la hora'] : ['sun', 'Pase pendiente']; };
     const sinPase = L.filter(x => x[1].no);
     return {
-      title: 'Registro de asistencia',
+      title: 'Historial de asistencia',
       html: `<section class="page ft">
         ${barraObras('ft-registro')}
-        ${heroHTML(`${L.length} obras activas · del ${esc(fFecha(UI.desde))} al ${esc(fFecha(UI.hasta))}`, 'Registro de<br>asistencia',
+        ${heroHTML(`${L.length} obras activas · del ${esc(fFecha(UI.desde))} al ${esc(fFecha(UI.hasta))}`, 'Historial de<br>asistencia',
           `<span class="h-count"><b>${L.reduce((a, x) => a + activosDe(x[0].id).length, 0)}</b> trabajadores · <b>${sum(s => s.env)}</b> pases enviados</span><span class="pill">Todas las obras</span>`,
           sqHTML('ok', 'Pases a<br>tiempo', `${sum(s => s.ok)}<span class="sq-de">/${sum(s => s.env)}</span>`, `${sum(s => s.late)} fuera de hora entre las ${L.length} obras`)
           + sqHTML(sum(s => s.no) ? 'bad' : 'ok', 'Días sin<br>pase de lista', sum(s => s.no), sinPase.length ? esc(sinPase.map(x => `${x[0].nombre}: ${x[1].no}`).join(' · ')) : 'Ningún día sin pase', 140))}
         <div class="fz-tools rv" style="--d:100">${rangoHTML(true)}</div>
-        <div class="fz-sec rv"><h2>Comparativo por obra</h2><small>Toca una obra para ver su registro completo</small></div>
+        <div class="fz-sec rv"><h2>Comparativo por obra</h2><small>Toca una obra para ver su historial completo</small></div>
         <div class="fz-cmp rv">${L.map(([o, s], k) => { const [c, t] = hoyDe(o), u = ultimoAviso(o.id, 'ft_reporte');
           return `<button type="button" class="fz-ocard" data-obra-sel="${esc(o.id)}">
             <span class="fz-oh"><span><b>${esc(o.nombre)}</b><small>${esc(residenteDe(o))} · ${activosDe(o.id).length} trabajadores</small></span>${api.ARR}</span>
@@ -1167,7 +1167,7 @@
 
   return {
     pages: { fuerza: pageFuerza, 'ft-altas': pageAltas, 'ft-pase': pagePase, 'ft-registro': pageRegistro },
-    titulos: { 'ft-altas': 'Altas y bajas', 'ft-pase': 'Pase de lista', 'ft-registro': 'Registro' },
+    titulos: { 'ft-altas': 'Altas y bajas', 'ft-pase': 'Pase de lista', 'ft-registro': 'Historial' },
     acciones: {
       'ft-altas': { label: 'Dar de alta', act: 'alta-trabajador', puede: () => obrasEdit().length > 0 },
       'ft-registro': { label: 'Enviar al gestor IMSS', act: 'gestor-ft', puede: () => esCoord() && UI.obra !== 'todas' && !!obra(UI.obra) }
