@@ -108,7 +108,8 @@
     { id: 'borrador', label: 'Borrador', ico: 'draft' },
     { id: 'rechazado', label: 'Rechazado', ico: 'x' },
     { id: 'nosum', label: 'No se suministró', ico: 'x' },   // v0.8: compras no lo consiguió
-    { id: 'caja', label: 'Caja chica', ico: 'cash' }        // v0.9: lo compra el residente en obra
+    { id: 'caja', label: 'Caja chica', ico: 'cash' },       // v0.9: lo compra el residente en obra
+    { id: 'notas', label: 'Pago por notas', ico: 'truck' }  // v0.15: el proveedor deja notas y se le paga juntándolas
   ];
   const TODOS = [...EXTRA.slice(0, 1), ...EST, ...EXTRA.slice(1)];
   const estIdx = id => EST.findIndex(e => e.id === id);
@@ -227,6 +228,7 @@
     if (p.aprobacion !== 'aprobada') return 'requisitado';
     if (p.suministro === 'no_suministrado') return 'nosum';
     if (p.cajaId) return 'caja';
+    if (p.pnId) return 'notas';
     const c = compra(p.compraId);
     return c ? compraEstado(c) : 'autorizado';
   }
@@ -525,7 +527,7 @@
                 return `<tr class="row${p.aprobacion === 'rechazada' ? ' is-off' : ''}" data-pid="${esc(p.id)}">
                   ${sel ? `<td class="c-ck">${e === 'autorizado' ? `<input class="ck" type="checkbox" value="${esc(p.id)}" aria-label="Seleccionar ${esc(p.insumo)}">` : ''}</td>` : ''}
                   <td class="c-n">${i + 1}</td>
-                  <td class="ins"><b>${esc(p.insumo)}</b>${p.observaciones ? `<small>${esc(p.observaciones)}</small>` : ''}${p.aprobacion === 'rechazada' && p.motivoRechazo ? `<small class="rej">Rechazado: ${esc(p.motivoRechazo)}</small>` : ''}${sumNota(p)}${cajaNota(p)}</td>
+                  <td class="ins"><b>${esc(p.insumo)}</b>${p.observaciones ? `<small>${esc(p.observaciones)}</small>` : ''}${p.aprobacion === 'rechazada' && p.motivoRechazo ? `<small class="rej">Rechazado: ${esc(p.motivoRechazo)}</small>` : ''}${sumNota(p)}${cajaNota(p)}${pnNota(p)}</td>
                   <td class="c-q">${qty(p.cantidad)}</td>
                   <td>${esc(p.unidad)}</td>
                   <td class="small">${esc(p.destino) || '<span class="muted">—</span>'}</td>
@@ -538,7 +540,7 @@
             </div>
           </div>
         </section>
-        <div class="selbar" hidden><span><b data-nsel>0</b> materiales seleccionados</span><button class="btn" type="button" data-a-caja>${I.cash}<span>Mandar a caja chica</span></button><button class="btn btn--solid" type="button" data-cot>${I.file}<span>Registrar cotización elegida</span></button></div>
+        <div class="selbar" hidden><span><b data-nsel>0</b> materiales seleccionados</span><button class="btn" type="button" data-a-caja>${I.cash}<span>Mandar a caja chica</span></button>${window.PagoNotas && D.pnListo ? `<button class="btn" type="button" data-a-notas>${I.truck}<span>Mandar a pago por notas</span></button>` : ''}<button class="btn btn--solid" type="button" data-cot>${I.file}<span>Registrar cotización elegida</span></button></div>
       </section>`,
       bind(sec) {
         $('[data-pdf]', sec).addEventListener('click', () => imprimir(r));
@@ -618,6 +620,9 @@
           if (!(await api.confirmar({ titulo: 'Mandar a caja chica', texto: `${ids.length} ${ids.length === 1 ? 'material lo comprará' : 'materiales los comprará'} el residente en obra con caja chica. Le aparecerán en <b>Caja chica</b> para subir su nota; no pasan por cotización ni factura.`, ok: 'Mandar a caja chica' }))) return;
           if (await hacer(() => R.mandarACaja(ids), 'Enviado a caja chica.')) api.rerender();
         });
+        const bn = $('[data-a-notas]', sec);
+        if (bn) bn.addEventListener('click', () => window.PagoNotas.mandar($$('.ck:checked', sec).map(c => c.value)));
+        $$('[data-pn-subir]', sec).forEach(b => b.addEventListener('click', e => { e.stopPropagation(); window.PagoNotas.subirNota(b.dataset.pnSubir); }));
         $$('tr[data-pid]', sec).forEach(tr => tr.addEventListener('click', e => {
           if (e.target.closest('a, input, button')) return;
           drMaterial(r, r.partidas.find(p => p.id === tr.dataset.pid));
@@ -716,7 +721,7 @@
             ${varias ? `<label class="psel psel--sm${UI.chObra ? ' on' : ''}"><span class="sr">Obra de la gráfica</span><select data-rf="chObra"><option value="">Todas las obras</option>${obrasMias().map(o => `<option value="${esc(o.id)}"${UI.chObra === o.id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</select></label>` : ''}
           </header>
           <div class="panel-b"><div class="chart-grid"><div class="chart-wrap" data-chart></div><div class="chart-side" data-chart-side></div></div>
-          <p class="muted small chart-nota">Pagos de compras (por la semana de su requisición) más los gastos de caja chica ya verificados por compras (por la semana del gasto). Es la base del futuro control de erogaciones y avance de obra.</p></div>
+          <p class="muted small chart-nota">Pagos de compras (por la semana de su requisición), gastos de caja chica ya verificados por compras (por la semana del gasto) y pagos por notas (por la semana del pago). Es la base del futuro control de erogaciones y avance de obra.</p></div>
         </section>
 
         <div class="tools-top rv" style="--d:160">
@@ -791,24 +796,26 @@
     const cs = D.compras.filter(c => c.pago && visibleObra(c.obraId) && (!obraF || c.obraId === obraF));
     // v0.10: caja chica ya verificada por compras (o reembolsada), en la semana del gasto
     const ks = D.caja.filter(k => ['verificado', 'reembolsado'].includes(k.estado) && visibleObra(k.obraId) && (!obraF || k.obraId === obraF));
-    if (!cs.length && !ks.length) { el.innerHTML = '<p class="muted">Aún no hay pagos registrados.</p>'; side.innerHTML = ''; return; }
-    const claves = [...cs, ...ks].map(wkKey);
+    // v0.15: pagos de "pago por notas", en la semana del pago
+    const gs = (D.pnPagos || []).filter(g => visibleObra(g.obraId) && (!obraF || g.obraId === obraF));
+    if (!cs.length && !ks.length && !gs.length) { el.innerHTML = '<p class="muted">Aún no hay pagos registrados.</p>'; side.innerHTML = ''; return; }
+    const claves = [...cs, ...ks, ...gs].map(wkKey);
     const min = Math.min(...claves), max = Math.max(wkKey(hw), ...claves);
     const data = [];
     for (let w = { anio: Math.floor(min / 100), semana: min % 100 }; wkKey(w) <= max && data.length < 60; w = wkAdd(w, 1)) {
-      const xs = cs.filter(c => wkKey(c) === wkKey(w)), kx = ks.filter(k => wkKey(k) === wkKey(w));
-      const comp = xs.reduce((a, c) => a + c.pago.monto, 0), caja = kx.reduce((a, k) => a + k.monto, 0);
-      data.push({ w, comp, caja, total: comp + caja, n: xs.length, nk: kx.length });
+      const xs = cs.filter(c => wkKey(c) === wkKey(w)), kx = ks.filter(k => wkKey(k) === wkKey(w)), gx = gs.filter(g => wkKey(g) === wkKey(w));
+      const comp = xs.reduce((a, c) => a + c.pago.monto, 0), caja = kx.reduce((a, k) => a + k.monto, 0), notas = gx.reduce((a, g) => a + g.monto, 0);
+      data.push({ w, comp, caja, notas, total: comp + caja + notas, n: xs.length, nk: kx.length, ng: gx.length });
     }
-    const tot = data.reduce((a, x) => a + x.total, 0), totK = data.reduce((a, x) => a + x.caja, 0);
+    const tot = data.reduce((a, x) => a + x.total, 0), totK = data.reduce((a, x) => a + x.caja + x.notas, 0), hayN = data.some(x => x.notas);
     const top = data.reduce((a, x) => (x.total > a.total ? x : a), data[0]);
     const conPago = data.filter(x => x.total > 0).length;
     side.innerHTML = `<div class="stats4">
       <div><small>Acumulado</small><b>${money(tot)}</b></div>
       <div><small>Promedio por semana con gasto</small><b>${money(conPago ? tot / conPago : 0)}</b></div>
       <div><small>Semana más alta</small><b>S${top.w.semana} · ${moneyK(top.total)}</b></div>
-      <div><small>De caja chica</small><b>${money(totK)}${tot ? ` <span class="muted">· ${Math.round(totK / tot * 100)}%</span>` : ''}</b></div></div>
-      <p class="c-ley"><span><i class="ley ley--c"></i>Compras pagadas</span><span><i class="ley ley--k"></i>Caja chica verificada</span></p>`;
+      <div><small>${hayN ? 'Caja chica y notas' : 'De caja chica'}</small><b>${money(totK)}${tot ? ` <span class="muted">· ${Math.round(totK / tot * 100)}%</span>` : ''}</b></div></div>
+      <p class="c-ley"><span><i class="ley ley--c"></i>Compras pagadas</span><span><i class="ley ley--k"></i>Caja chica verificada</span>${hayN ? '<span><i class="ley ley--n"></i>Pago por notas</span>' : ''}</p>`;
 
     const draw = () => {
       const W = Math.max(260, el.clientWidth || 600), H = 220, L = 54, Rm = 6, T = 24, B = 26;
@@ -827,8 +834,8 @@
       const bars = data.map((x, i) => {
         const cx = L + band * i + band / 2, h = Math.max(0, T + ih - y(x.total)), x0 = cx - bw / 2, y0 = T + ih - h;
         const cur = wkKey(x.w) === wkKey(hw);
-        const yC = y(x.comp);   // tope de compras; caja chica va encima
-        const path = seg(`bar${cur ? ' cur' : ''}`, x0, yC, T + ih, !x.caja) + seg(`bar bar--k${cur ? ' cur' : ''}`, x0, y0, yC, true);
+        const yC = y(x.comp), yK = y(x.comp + x.caja);   // compras abajo, caja chica encima y pago por notas arriba
+        const path = seg(`bar${cur ? ' cur' : ''}`, x0, yC, T + ih, !x.caja && !x.notas) + seg(`bar bar--k${cur ? ' cur' : ''}`, x0, yK, yC, !x.notas) + seg(`bar bar--n${cur ? ' cur' : ''}`, x0, y0, yK, true);
         const lab = (x === top || cur) && x.total > 0 ? `<text class="lbl" x="${cx}" y="${y0 - 6}" text-anchor="middle">${moneyK(x.total)}</text>` : '';
         const xl = i % every === 0 || cur ? `<text x="${cx}" y="${H - 8}" text-anchor="middle"${cur ? ' class="cur"' : ''}>S${x.w.semana}</text>` : '';
         return `<g class="col" data-i="${i}">${path}${lab}<g class="ax">${xl}</g><rect class="hit" x="${L + band * i}" y="${T}" width="${band}" height="${ih}"/></g>`;
@@ -841,7 +848,7 @@
       $$('g.col', el).forEach(g => {
         g.addEventListener('mouseenter', () => {
           const i = +g.dataset.i, x = data[i], cx = L + band * i + band / 2;
-          tip.innerHTML = `<small>Semana ${x.w.semana} · ${esc(wkRange(x.w))}</small><b>${money(x.total)}</b><small>Compras: ${money(x.comp)} · ${x.n} ${x.n === 1 ? 'pago' : 'pagos'}</small>${x.caja ? `<br><small>Caja chica: ${money(x.caja)} · ${x.nk} ${x.nk === 1 ? 'gasto' : 'gastos'}</small>` : ''}`;
+          tip.innerHTML = `<small>Semana ${x.w.semana} · ${esc(wkRange(x.w))}</small><b>${money(x.total)}</b><small>Compras: ${money(x.comp)} · ${x.n} ${x.n === 1 ? 'pago' : 'pagos'}</small>${x.caja ? `<br><small>Caja chica: ${money(x.caja)} · ${x.nk} ${x.nk === 1 ? 'gasto' : 'gastos'}</small>` : ''}${x.notas ? `<br><small>Pago por notas: ${money(x.notas)} · ${x.ng} ${x.ng === 1 ? 'pago' : 'pagos'}</small>` : ''}`;
           tip.style.left = Math.min(Math.max(cx, 90), W - 90) + 'px'; tip.style.top = Math.max(y(x.total), T + 30) + 'px'; tip.classList.add('on');
         });
         g.addEventListener('mouseleave', () => tip.classList.remove('on'));
@@ -1367,6 +1374,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   /* ---------- Línea de tiempo de un material ---------- */
   function drMaterial(r, p) {
     const c = compra(p.compraId), e = estado(r, p), k = estIdx(e), f = c && c.factura;
+    const pm = p.pnId && pnMat(p.pnId), pns = pm ? pnNotasDe(pm.id) : [];
     const pasos = [
       ['Requisitado', r.enviadaEn ? `Lo pidió ${r.creadaPor} · ${fDateT(r.enviadaEn)}` : '', 'Lo pide el residente al enviar la requisición'],
       ['Autorizado', p.aprobacion === 'aprobada' ? `${p.revisadaPor} · ${fDateT(p.revisadaEn)}` : '', 'Espera la revisión del coordinador de obra'],
@@ -1390,10 +1398,13 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
             ${p.observaciones ? `<div><dt>Observaciones</dt><dd>${esc(p.observaciones)}</dd></div>` : ''}
             <div><dt>¿Dónde se empleará?</dt><dd>${esc(p.destino || '—')}</dd></div>
             <div><dt>Suministro solicitado</dt><dd>${esc(fDateL(suministro(r)))}</dd></div>
-            <div><dt>Proveedor</dt><dd>${c ? `<a class="link-u" href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>` : '—'}</dd></div>
+            <div><dt>Proveedor</dt><dd>${c ? `<a class="link-u" href="#/c/${esc(c.id)}">${esc(c.proveedor.nombre)}</a>` : pm ? esc(pm.proveedor) + ' · pago por notas' : '—'}</dd></div>
           </dl>
         </div></section>
-        ${e === 'borrador' || e === 'rechazado' || e === 'nosum' ? '' : `<section class="fs"><div class="fs-b">
+        ${pm ? `<section class="fs"><div class="fs-b"><p class="fld-h">Este material va por <b>pago por notas</b>: cada vez que ${esc(pm.proveedor || 'el proveedor')} dé el servicio, se sube la foto de su nota. Compras pone el importe y las paga juntas.</p>
+          ${pns.length ? `<ul class="tlist">${pns.map(n => `<li class="tline"><span class="tmail">Nota ${esc(n.folio || 'sin folio')} · ${esc(fDate(n.fecha))}${n.recibido ? ' · ' + esc(n.recibido) : ''}</span><span class="tacts">${n.pagoId ? '<span class="tagx tagx--ok">Pagada</span>' : n.importe == null ? '<span class="tagx tagx--wait">Espera importe</span>' : `<b>${money(n.importe)}</b>`}</span></li>`).join('')}</ul>` : '<p class="muted small">Todavía no hay notas.</p>'}
+        </div></section>` : ''}
+        ${pm || e === 'borrador' || e === 'rechazado' || e === 'nosum' ? '' : `<section class="fs"><div class="fs-b">
           <ol class="tl">${pasos.map(([t, hecho, pend], i) => `<li class="${hechos[i] ? 'done' : i === sig ? 'now' : ''}"><span class="dot">${I[EST[i].ico]}</span><div><h4>${t}</h4><p>${esc(hechos[i] ? hecho : pend)}</p></div></li>`).join('')}</ol>
         </div></section>`}
       </div>
@@ -1402,8 +1413,9 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
           <button class="btn" type="button" data-sum="sustituido">${I.edit}<span>${p.suministro === 'sustituido' ? 'Cambiar el sustituto' : 'Cambiar por otro similar'}</span></button>
           ${p.suministro !== 'no_suministrado' ? `<button class="btn btn--danger" type="button" data-sum="no_suministrado">${I.close}<span>No se pudo suministrar</span></button>` : ''}
         </div></fieldset>` : ''}
-      <footer class="dr-f">${c ? `<a class="btn btn--solid" href="#/c/${esc(c.id)}">${I.receipt}<span>Ver la compra</span></a>` : '<button class="btn" type="button" data-close><span>Cerrar</span></button>'}</footer>
+      <footer class="dr-f">${c ? `<a class="btn btn--solid" href="#/c/${esc(c.id)}">${I.receipt}<span>Ver la compra</span></a>` : pm ? `<a class="btn" href="#/notas" data-close><span>Ver en Pago por notas</span></a>${window.PagoNotas && window.PagoNotas.puedeSubir(pm.obraId) ? `<button class="btn btn--solid" type="button" data-pn-subir="${esc(pm.id)}">${I.plus}<span>Subir nota</span></button>` : ''}` : '<button class="btn" type="button" data-close><span>Cerrar</span></button>'}</footer>
     </div>`, {}, panel => {
+      $$('[data-pn-subir]', panel).forEach(b => b.addEventListener('click', () => { api.closeDrawer(true); window.PagoNotas.subirNota(b.dataset.pnSubir); }));
       $$('[data-sum]', panel).forEach(b => b.addEventListener('click', async () => {
         const v = b.dataset.sum;
         let sus = '', nota = '';
@@ -1889,6 +1901,15 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
   };
   const kTag = k => `<span class="tagx tagx--${KEST[k.estado].cls}">${esc(KEST[k.estado].label)}</span>`;
   const caja = id => D.caja.find(k => k.id === id);
+  // v0.15: material en pago por notas (proveedor, cuántas notas y botón para subir otra)
+  const pnMat = id => (D.pnMat || []).find(m => m.id === id);
+  const pnNotasDe = id => (D.pnNotas || []).filter(n => n.materialId === id);
+  const pnNota = p => {
+    const m = p.pnId && pnMat(p.pnId); if (!m) return '';
+    const ns = pnNotasDe(m.id), pag = ns.filter(n => n.pagoId).length;
+    return `<small class="sust">Pago por notas · ${esc(m.proveedor || 'proveedor')} · ${ns.length ? `${ns.length} ${ns.length === 1 ? 'nota' : 'notas'}${pag ? ` (${pag} ${pag === 1 ? 'pagada' : 'pagadas'})` : ''}` : 'sin notas todavía'}</small>`
+      + (window.PagoNotas && window.PagoNotas.puedeSubir(m.obraId) ? `<button class="tbtn tbtn--sm pn-subir" type="button" data-pn-subir="${esc(m.id)}">${I.plus}<span>Subir nota</span></button>` : '');
+  };
   const cajaNota = p => { const k = p.cajaId && caja(p.cajaId); return k ? `<small class="sust">Caja chica · ${esc(KEST[k.estado].label.toLowerCase())}${k.monto ? ' · ' + money(k.monto) : ''}</small>` : ''; };
   const cuenta = k => ['por_aprobar', 'por_verificar', 'verificado'].includes(k.estado);   // gasto hecho aún no reembolsado
   const KFILTROS = [['todos', 'Todos'], ['por_comprar', 'Por comprar'], ['por_aprobar', 'Por aprobar'], ['por_verificar', 'Por verificar'], ['verificado', 'Verificados'], ['reembolsado', 'Reembolsados']];

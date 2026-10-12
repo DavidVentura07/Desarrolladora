@@ -128,6 +128,15 @@
     verificadoPor: quien(k.verificado_por), reembolsadoEn: k.reembolsado_en || '', actualizadoEn: k.actualizado_en
   });
 
+  // v0.15: pago por notas (material mandado, nota del proveedor y pago que junta varias notas)
+  const dePnMat = m => ({ id: m.id, partidaId: m.partida_id, obraId: m.obra_id, anio: m.anio, semana: m.semana, concepto: str(m.concepto), cantidad: num(m.cantidad),
+    unidad: str(m.unidad), proveedorId: m.proveedor_id || '', proveedor: str(m.proveedor_nombre), creadoPor: quien(m.creado_por), creadoEn: m.creado_en });
+  const dePnNota = n => ({ id: n.id, materialId: n.material_id, obraId: n.obra_id, folio: str(n.folio), fecha: fecha(n.fecha), recibido: str(n.recibido),
+    archivos: arr(n.archivos), importe: n.importe == null ? null : num(n.importe), importePor: quien(n.importe_por), importeEn: n.importe_en || '',
+    pagoId: n.pago_id || '', creadoPor: quien(n.creado_por), creadoPorId: n.creado_por || '', creadoEn: n.creado_en, avisos: [] });
+  const dePnPago = g => ({ id: g.id, obraId: g.obra_id, proveedorId: g.proveedor_id || '', proveedor: str(g.proveedor_nombre), monto: num(g.monto), fecha: fecha(g.fecha),
+    anio: g.anio, semana: g.semana, archivos: arr(g.archivos), nota: str(g.nota), creadoPor: quien(g.creado_por), creadoEn: g.creado_en, avisos: [] });
+
   // v0.10: razón social a la que se factura
   const deFiscal = f => ({
     id: f.id, nombre: str(f.nombre), rfc: str(f.rfc).toUpperCase(), regimen: str(f.regimen), cp: str(f.cp), usoCfdi: str(f.uso_cfdi),
@@ -136,13 +145,13 @@
   });
 
   /* ---------- Estado en memoria ---------- */
-  let db = { obras: [], requisiciones: [], compras: [], caja: [], fiscal: [], fiscalListo: false, colados: [], config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
+  let db = { obras: [], requisiciones: [], compras: [], caja: [], fiscal: [], fiscalListo: false, colados: [], pnMat: [], pnNotas: [], pnPagos: [], pnListo: false, config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] } };
 
   // Tablas nuevas de la v0.7: si aún no se corre 04-ajustes.sql, la app sigue funcionando sin ellas
   const opcional = q => q.then(r => (r.error ? { data: [], error: null } : r), () => ({ data: [], error: null }));
 
   async function cargar() {
-    const [, obras, reqs, compras, config, hist, avisos, caja, fiscal, colados] = await Promise.all([
+    const [, obras, reqs, compras, config, hist, avisos, caja, fiscal, colados, pnMat, pnNotas, pnPagos] = await Promise.all([
       window.Nube.recargarPerfiles(),   // nombres de residentes, suplentes y de quién hizo cada cosa
       sb().from('obras').select('*, obra_suplentes(*)').order('nombre'),
       sb().from('requisiciones').select('*, partidas(*)').order('anio', { ascending: false }).order('semana', { ascending: false }),
@@ -154,7 +163,11 @@
       // v0.10: si aún no se corre 07-datos-fiscales.sql, se usa la empresa de "Respaldo y datos"
       sb().from('datos_fiscales').select('*').order('nombre').then(r => r, e => ({ data: null, error: e })),
       // v0.11: datos mínimos de los colados para las compras que vienen de uno
-      opcional(sb().from('colados').select('id, obra_id, folio, fecha, hora, elemento, ubicacion, concretos, estado'))
+      opcional(sb().from('colados').select('id, obra_id, folio, fecha, hora, elemento, ubicacion, concretos, estado')),
+      // v0.15: pago por notas (17-pago-por-notas.sql); sin correrlo, todo lo demás funciona igual
+      sb().from('pn_materiales').select('*').order('creado_en').then(r => r, e => ({ data: null, error: e })),
+      opcional(sb().from('pn_notas').select('*').order('fecha')),
+      opcional(sb().from('pn_pagos').select('*').order('fecha', { ascending: false }))
     ]);
     const d = {
       obras: ok(obras).map(deObra),
@@ -165,7 +178,8 @@
       fiscalListo: !fiscal.error,
       colados: ok(colados).map(k => ({ id: k.id, obraId: k.obra_id, folio: str(k.folio), fecha: fecha(k.fecha), hora: str(k.hora), elemento: str(k.elemento), ubicacion: str(k.ubicacion),
         volumen: arr(k.concretos).reduce((a, x) => a + num(x.volumen), 0), estado: k.estado })),
-      config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] }
+      config: { empresa: { nombre: '', rfc: '', correoRequisiciones: '' }, proceso: [] },
+      pnListo: !pnMat.error, pnMat: pnMat.error ? [] : arr(pnMat.data).map(dePnMat), pnNotas: ok(pnNotas).map(dePnNota), pnPagos: ok(pnPagos).map(dePnPago)
     };
     ok(config).forEach(c => {
       if (c.clave === 'empresa') { const e = obj(c.valor); d.config.empresa = { nombre: str(e.nombre), rfc: str(e.rfc).toUpperCase(), correoRequisiciones: str(e.correoRequisiciones) }; }
@@ -184,10 +198,15 @@
       if (r) r.avisos.push(av);
       const k = a.caja_id && d.caja.find(x => x.id === a.caja_id);
       if (k) k.avisos.push(av);
+      const pn = (a.pn_nota_id && d.pnNotas.find(x => x.id === a.pn_nota_id)) || (a.pn_pago_id && d.pnPagos.find(x => x.id === a.pn_pago_id));
+      if (pn) pn.avisos.push(av);
     });
     // Material mandado a caja chica
     const porCaja = new Map(d.caja.filter(k => k.partidaId).map(k => [k.partidaId, k.id]));
     d.requisiciones.forEach(r => r.partidas.forEach(p => { p.cajaId = porCaja.get(p.id) || ''; }));
+    // v0.15: material mandado a pago por notas
+    const porPn = new Map(d.pnMat.map(m => [m.partidaId, m.id]));
+    d.requisiciones.forEach(r => r.partidas.forEach(p => { p.pnId = porPn.get(p.id) || ''; }));
     // Liga material ↔ compra y compra ↔ requisición
     const porPartida = new Map();
     d.compras.forEach(c => c.partidas.forEach(pid => porPartida.set(pid, c)));
@@ -530,6 +549,81 @@
       const filas = ok(await sb().from('caja_chica').delete().eq('id', id).select('id'));
       if (!filas.length) throw new Error('Tu rol no puede quitar este gasto.');
       if (k) await borrarArchivos(k.archivos.map(a => a.ruta)).catch(() => {});
+    },
+
+    /* Pago por notas (v0.15) */
+    async mandarANotas(partidaIds, proveedorId) {
+      ok(await sb().from('pn_materiales').insert(partidaIds.map(pid => ({ partida_id: pid, proveedor_id: proveedorId,
+        obra_id: (db.requisiciones.find(r => r.partidas.some(x => x.id === pid)) || {}).obraId }))).select('id'));
+    },
+    async cambiarProveedorNotas(materialId, proveedorId) {
+      const filas = ok(await sb().from('pn_materiales').update({ proveedor_id: proveedorId }).eq('id', materialId).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede cambiar el proveedor.');
+    },
+    async quitarDeNotas(materialId) {
+      const filas = ok(await sb().from('pn_materiales').delete().eq('id', materialId).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede quitar este material de pago por notas.');
+    },
+    // n = { id?, materialId, obraId, folio, fecha, recibido, archivos }, nuevos = File[]
+    async guardarNota(n, nuevos = []) {
+      const id = n.id || uid();
+      const subidos = [];
+      try {
+        for (const f of nuevos) subidos.push(await subirArchivo(n.obraId, 'notas-' + n.materialId, f));
+        const fila = { folio: str(n.folio), fecha: n.fecha || null, recibido: str(n.recibido),
+          archivos: [...arr(n.archivos), ...subidos.map(({ ruta, nombre }) => ({ ruta, nombre }))] };
+        if (n.id) {
+          const filas = ok(await sb().from('pn_notas').update(fila).eq('id', id).select('id'));
+          if (!filas.length) throw new Error('Tu rol no puede modificar esta nota.');
+        } else {
+          ok(await sb().from('pn_notas').insert(Object.assign({ id, material_id: n.materialId, obra_id: n.obraId }, fila)).select('id'));
+        }
+      } catch (e) {
+        await borrarArchivos(subidos.map(x => x.ruta)).catch(() => {});
+        throw e;
+      }
+      return id;
+    },
+    async importeNota(id, importe) {
+      const filas = ok(await sb().from('pn_notas').update({ importe: importe === '' || importe == null ? null : num(importe) }).eq('id', id).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede poner el importe.');
+    },
+    async borrarNota(id) {
+      const n = db.pnNotas.find(x => x.id === id);
+      const filas = ok(await sb().from('pn_notas').delete().eq('id', id).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede quitar esta nota.');
+      if (n) await borrarArchivos(n.archivos.map(a => a.ruta)).catch(() => {});   // solo compras y jefes borran archivos; si no, se quedan
+    },
+    // p = { obraId, notas: [id], monto, fecha, nota }, comprobante = File[]
+    async registrarPagoNotas(p, comprobante = []) {
+      const carpeta = 'pago-notas-' + uid();
+      const subidos = [];
+      try {
+        for (const f of comprobante) subidos.push(await subirArchivo(p.obraId, carpeta, f));
+        const { data, error } = await sb().rpc('registrar_pago_notas', { p_notas: p.notas, p_monto: num(p.monto), p_fecha: p.fecha,
+          p_archivos: subidos.map(({ ruta, nombre }) => ({ ruta, nombre })), p_nota: str(p.nota) });
+        if (error) throw new Error(window.Nube.traducir(error));
+        return data;
+      } catch (e) {
+        await borrarArchivos(subidos.map(x => x.ruta)).catch(() => {});
+        throw e;
+      }
+    },
+    async borrarPagoNotas(id) {
+      const g = db.pnPagos.find(x => x.id === id);
+      const filas = ok(await sb().from('pn_pagos').delete().eq('id', id).select('id'));
+      if (!filas.length) throw new Error('Tu rol no puede quitar este pago.');
+      if (g) await borrarArchivos(g.archivos.map(a => a.ruta)).catch(() => {});
+    },
+    // Aviso por WhatsApp o correo (Edge Function "aviso-notas"): nota → compras · pago → residente
+    async avisarNotas(evento, id) {
+      const { data, error } = await sb().functions.invoke('aviso-notas', { body: evento === 'nota' ? { nota_id: id, evento } : { pago_id: id, evento } });
+      if (error) {
+        let msg = '';
+        try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
+        throw new Error(msg || 'No se pudo enviar el aviso (¿está publicada la función "aviso-notas" en Supabase?).');
+      }
+      return data;
     },
 
     // Liga temporal (1 hora) para ver o descargar un archivo privado

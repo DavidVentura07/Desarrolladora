@@ -225,13 +225,13 @@
       const { data, error } = await sb().functions.invoke('aviso-colado', { body: { colado_id: id, evento } });
       if (error) {
         let msg = ''; try { msg = (await error.context.json()).error; } catch (e) { /* sin cuerpo */ }
-        throw new Error(msg || 'No se pudo enviar el correo (¿está publicada la función "aviso-colado" en Supabase?).');
+        throw new Error(msg || 'No se pudo mandar el aviso (¿está publicada la función "aviso-colado" en Supabase?).');
       }
-      toast(`Correo enviado a ${data.aviso.para.map(p => p.nombre || p.correo).join(', ')}.`);
+      toast(`Aviso enviado a ${avisoPara(data.aviso.para)}.`);
       await cargar();
       if (location.hash === '#/col/' + id || location.hash === '#/colados') api.rerender();
     } catch (e) {
-      toast(`El cambio quedó guardado, pero no salió el correo: ${e.message}`);
+      toast(`El cambio quedó guardado, pero no salió el aviso: ${e.message}`);
     }
   }
   async function hacer(fn, msgOk) {
@@ -335,6 +335,8 @@
   }
 
   /* ---------- Detalle ---------- */
+  // v0.15: a quién y por dónde salió el aviso (WhatsApp o correo)
+  const avisoPara = xs => xs.map(p => `${p.nombre || p.correo || p.telefono}${p.canal === 'whatsapp' ? ' (WhatsApp)' : p.canal === 'correo' ? ' (correo)' : ''}`).join(', ');
   const folioDe = id => { const x = C.colados.find(y => y.id === id); return x ? x.folio : 'otro colado'; };
   const listaB = k => `<li><b class="col-kv">${m3(k.volumen)}</b><div><div class="col-chips"><span>Volumen a bombear</span></div>${k.nota ? `<small class="muted">${esc(k.nota)}</small>` : ''}</div></li>`;
   const listaK = k => `<li><b class="col-kv">${m3(k.volumen)}</b><div><div class="col-chips">${[k.fc && "f'c " + k.fc, k.clase && 'Clase ' + k.clase, k.edad, k.tma && 'TMA ' + k.tma, k.revenimiento && 'Rev. ' + k.revenimiento, k.colocacion, ...k.aditivos].filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('') || '<span class="muted">Sin especificar</span>'}</div>${k.nota ? `<small class="muted">${esc(k.nota)}</small>` : ''}</div></li>`;
@@ -381,7 +383,7 @@
         ${extras.length ? `<div class="note note--info rv" style="--d:40">${I.plus}<p><b>Extras de este colado:</b> ${extras.map(x => `<a class="link-u" href="#/col/${esc(x.id)}">${esc(x.folio)}</a> (${esc(TIPO_SOL[tipoDe(x)].toLowerCase())}${x.motivo ? ', ' + esc(x.motivo) : ''} · ${esc((ESTADOS[x.estado] || {}).label || '')})`).join('; ')}</p></div>` : ''}
         ${c.estado === 'cancelada' ? `<div class="note note--bad rv" style="--d:40">${I.alert}<p><b>Colado cancelado por ${esc(c.canceladaPor)}.</b> ${esc(c.comentario)}</p></div>` : ''}
         <div class="c-acts rv" style="--d:50">${acts}</div>
-        ${ultimo ? `<p class="k-aviso col-sec rv">${I.mail}<span>Correo ${c.estado === 'enviada' ? 'al coordinador' : 'enviado'} · ${esc(ultimo.para.map(p => p.nombre || p.correo).join(', '))} · ${esc(fDateT(ultimo.en))}</span></p>` : ''}
+        ${ultimo ? `<p class="k-aviso col-sec rv">${ultimo.para.every(p => p.canal === 'whatsapp') ? I.wa : I.mail}<span>Aviso ${c.estado === 'enviada' ? 'al coordinador' : 'enviado'} · ${esc(avisoPara(ultimo.para))} · ${esc(fDateT(ultimo.en))}</span></p>` : ''}
         ${seccionCotizaciones(c)}
         <div class="d-grid">
           <div class="d-main">
