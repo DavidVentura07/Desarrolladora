@@ -209,6 +209,24 @@
     const filas = ok(await sb().from('colados').update(f).eq('id', id).select('id'));
     if (!filas.length) throw new Error('No tienes permiso para este cambio.');
   }
+  // v0.19: borrado completo (admin técnico): el colado (la base borra en cascada cotizaciones y avisos),
+  // después sus compras y al final los archivos de su carpeta (cotizaciones, PDF de solicitudes)
+  async function borrarCompleto(c) {
+    const cs = comprasDe(c);
+    const carpeta = `${c.obraId}/colado-${c.id}/`;
+    const rutas = new Set([...cotsDe(c).flatMap(q => arr(q.archivos).map(a => a.ruta)),
+      ...cs.flatMap(x => arr(x.documentos).flatMap(d => arr(d.archivos).map(a => a.ruta)))].filter(r => r && r.startsWith(carpeta)));
+    const filas = ok(await sb().from('colados').delete().eq('id', c.id).select('id'));
+    if (!filas.length) throw new Error('No se pudo borrar (solo el admin técnico).');
+    const fallas = [];
+    for (const x of cs) await R.borrarCompra(x.id).catch(e => fallas.push(`${x.proveedor.nombre}: ${e.message}`));
+    try {   // los PDF de las solicitudes no están en la base: se buscan en la carpeta
+      const { data } = await sb().storage.from('documentos').list(carpeta.slice(0, -1), { limit: 1000 });
+      arr(data).forEach(f => { if (f && f.name) rutas.add(carpeta + f.name); });
+    } catch (e) { /* sin lista: se borra lo que se conoce */ }
+    if (rutas.size) await R.borrarArchivos([...rutas]).catch(() => {});
+    if (fallas.length) toast(`El colado se borró, pero no estas compras: ${fallas.join('; ')}. Bórralas en Compras y facturas.`);
+  }
   async function borrar(id) {
     const filas = ok(await sb().from('colados').delete().eq('id', id).select('id'));
     if (!filas.length) throw new Error('Solo se borran solicitudes en borrador.');
@@ -368,7 +386,9 @@
       puedeCerrar(c) ? `<button class="btn${esComprasR() ? '' : ' btn--solid'}" type="button" data-cerrar>${I.check}<span>Registrar colado realizado</span></button>` : '',
       `<button class="btn" type="button" data-pdf>${I.print}<span>PDF${['aprobada', 'realizado'].includes(c.estado) ? '' : ' (vista previa)'}</span></button>`,
       coord && ['enviada', 'aprobada'].includes(c.estado) ? `<button class="btn btn--danger" type="button" data-cancelar>${I.close}<span>Cancelar colado</span></button>` : '',
-      c.estado === 'borrador' && puedeEditar(c.obraId) ? `<button class="ibtn ibtn--line" type="button" data-borrar title="Borrar borrador" aria-label="Borrar borrador">${I.trash}</button>` : ''
+      c.estado === 'borrador' && puedeEditar(c.obraId) ? `<button class="ibtn ibtn--line" type="button" data-borrar title="Borrar borrador" aria-label="Borrar borrador">${I.trash}</button>` : '',
+      // v0.19: el admin técnico borra por completo un colado ya enviado (pruebas); lo normal es cancelarlo
+      c.estado !== 'borrador' && esAdmin() ? `<button class="ibtn ibtn--line" type="button" data-borrar-todo title="Borrar por completo (admin técnico)" aria-label="Borrar por completo">${I.trash}</button>` : ''
     ].join('');
     const hist = [
       ['Capturó', c.creadaPor && `${esc(c.creadaPor)}${c.creadaEn ? ' · ' + esc(fDateT(c.creadaEn)) : ''}`],
@@ -447,6 +467,19 @@
         on('[data-cot-nueva]', () => drCotizacion(c, null));
         $$('[data-cot]', sec).forEach(b => b.addEventListener('click', () => accionCot(c, C.cots.find(q => q.id === b.dataset.cot), b.dataset.acc)));
         $$('[data-ruta]', sec).forEach(b => b.addEventListener('click', () => abrirArchivo(b.dataset.ruta)));
+        on('[data-borrar-todo]', async () => {
+          const cs = comprasDe(c), qs = cotsDe(c), ex = C.colados.filter(x => x.extraDe === c.id);
+          const lista = [
+            'la solicitud con todos sus eventos, su historial de avisos y los PDF enviados a proveedores',
+            qs.length && `${qs.length === 1 ? 'la cotización registrada' : qs.length + ' cotizaciones'} con sus archivos`,
+            cs.length && `${cs.length === 1 ? 'su compra' : 'sus ' + cs.length + ' compras'} con sus documentos: ${comprasTxt(cs)}`
+          ].filter(Boolean);
+          const v = await api.preguntar({ titulo: 'Borrar por completo', peligro: true, ok: 'Borrar por completo', requerido: true, etiqueta: 'Escribe el folio para confirmar',
+            texto: `Solo para pruebas o errores: <b>${esc(c.folio)}</b> desaparece de la plataforma. Si el colado era real y ya no va, usa <b>Cancelar colado</b>.<br><br>Se borra: ${lista.join('; ')}.${cs.some(x => x.pago) ? '<br><b>Ojo: una compra ya tiene pago registrado.</b>' : ''}${ex.length ? `<br>Sus extras (${ex.map(x => esc(x.folio)).join(', ')}) se quedan, sin la liga.` : ''}<br>No se puede deshacer.` });
+          if (v == null) return;
+          if (str(v).toUpperCase() !== c.folio.toUpperCase()) { toast('El folio no coincide; no se borró nada.'); return; }
+          if (await hacer(() => borrarCompleto(c), `${c.folio} se borró por completo.`)) location.hash = '#/colados';
+        });
         on('[data-borrar]', async () => {
           if (!(await api.confirmar({ titulo: 'Borrar borrador', texto: `Se borrará <b>${esc(c.folio)}</b>. No se puede deshacer.`, ok: 'Borrar', peligro: true }))) return;
           if (await hacer(() => borrar(c.id), 'Borrador borrado.')) location.hash = '#/colados';
