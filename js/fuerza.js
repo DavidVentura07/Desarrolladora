@@ -94,11 +94,12 @@
       N.todo(() => sb().from('trabajadores').select('*').order('nombre').order('id')),
       N.todo(() => sb().from('trabajador_datos').select('*').order('trabajador_id')).then(r => r, () => ({ data: [] })),
       N.todo(() => sb().from('trabajador_movimientos').select('*').order('en', { ascending: false }).order('id')).then(r => r, () => ({ data: [] })),
-      sb().from('pases_lista').select('*').gte('fecha', F.ini).lte('fecha', F.fin),
+      N.todo(() => sb().from('pases_lista').select('*').gte('fecha', F.ini).lte('fecha', F.fin).order('fecha').order('id')),
       sb().from('colado_listas').select('clave, valores').in('clave', Object.keys(LISTAS)),
       sb().from('config').select('valor').eq('clave', 'fuerza_trabajo'),
       // v0.13 partes 2 y 3 (14-fuerza-avisos.sql): avisos por obra
-      sb().from('avisos').select('*').not('obra_id', 'is', null).order('en', { ascending: false }).limit(300).then(r => r, () => ({ data: [] }))
+      // v0.19: solo los que usan las páginas (los "pase no enviado", uno por obra y día, dejaban fuera el envío al gestor)
+      sb().from('avisos').select('*').not('obra_id', 'is', null).in('evento', ['ft_cambios', 'ft_reporte']).order('en', { ascending: false }).limit(500).then(r => r, () => ({ data: [] }))
     ]).then(rs => { F.avisos = arr((rs[6] || {}).data).map(a => ({ obraId: a.obra_id, evento: a.evento, fecha: a.fecha || '', para: arr(a.para), por: quien(a.por), en: a.en })); return rs; });
     if (ts.error || ps.error) { F.listo = false; F.error = (ts.error || ps.error).message; return F; }
     F.listo = true; F.error = '';
@@ -541,8 +542,12 @@
       const marcas = ts.map(t => ({ trabajador_id: t.id, marca: pl.marcas[t.id].m, hora: pl.marcas[t.id].hora || '', nota: pl.marcas[t.id].nota || '' }));
       ok(await sb().rpc('enviar_pase_lista', { p_obra: o.id, p_marcas: marcas, p_fotos: fotos }));
     } catch (e) {
-      btn.disabled = false; $('span', btn).textContent = 'Enviar pase de lista';
-      toast(e.message); return;
+      // v0.19: con señal débil la base puede haberlo recibido aunque la respuesta no llegó
+      const r = await sb().from('pases_lista').select('id').eq('obra_id', o.id).eq('fecha', pl.fecha).maybeSingle().then(x => x, () => ({}));
+      if (!(r && r.data)) {
+        btn.disabled = false; $('span', btn).textContent = 'Enviar pase de lista';
+        toast(e.message); return;
+      }
     }
     borrarBorrador(o.id, pl.fecha);
     pl.fotos.forEach(x => URL.revokeObjectURL(x.url)); PL = null;
@@ -842,10 +847,11 @@
   /* =========================================================
      REGISTRO (tabla por rango de fechas)
      ========================================================= */
+  const MAX_DIAS = 93;   // reporte-fuerza acepta hasta 92 días entre las dos fechas
   function diasRango() {
     const out = [];
     let d = UI.desde;
-    for (let i = 0; d <= UI.hasta && i < 62; i++, d = addDays(d, 1)) if (dow(d) !== 0) out.push(d);
+    for (let i = 0; d <= UI.hasta && i < MAX_DIAS; i++, d = addDays(d, 1)) if (dow(d) !== 0) out.push(d);   // v0.19: el mismo tope que el PDF (3 meses)
     return out;
   }
   function estadoDia(o, d) {
@@ -940,7 +946,11 @@
     };
   }
   function bindRango(sec) {
-    const fijar = (a, b) => { if (!a || !b) return; if (b < a) [a, b] = [b, a]; UI.desde = a; UI.hasta = b; saveUI(); api.rerender(); };
+    const fijar = (a, b) => {
+      if (!a || !b) return; if (b < a) [a, b] = [b, a];
+      if (b > addDays(a, MAX_DIAS - 1)) { b = addDays(a, MAX_DIAS - 1); toast(`El periodo puede ser de hasta 3 meses: queda del ${fMes(a)} al ${fMes(b)}.`); }
+      UI.desde = a; UI.hasta = b; saveUI(); api.rerender();
+    };
     $$('[data-rango]', sec).forEach(b => b.addEventListener('click', () => { const r = RANGOS()[b.dataset.rango]; fijar(r[0], r[1]); }));
     const bo = $('[data-otro]', sec), fs = $('[data-fechas]', sec);
     if (bo && fs) {

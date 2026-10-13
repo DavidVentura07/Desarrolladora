@@ -27,7 +27,8 @@
   const pad = n => String(n).padStart(2, '0');
   const MES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
   const toDate = s => { if (!s) return null; if (/^\d{4}-\d{2}-\d{2}$/.test(s)) { const m = s.split('-'); return new Date(+m[0], +m[1] - 1, +m[2]); } const d = new Date(s); return isNaN(d) ? null : d; };
-  const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  const FMX = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City' });
+  const today = () => FMX.format(new Date());   // v0.19: hora de la Ciudad de México, no el reloj del teléfono
   const fDate = s => { const d = toDate(s); return d ? `${d.getDate()} ${MES[d.getMonth()].slice(0, 3)}` : '—'; };
   const fDateL = s => { const d = toDate(s); return d ? `${d.getDate()} de ${MES[d.getMonth()]} ${d.getFullYear()}` : 'sin fecha'; };
   const fDateT = s => { const d = toDate(s); if (!d) return '—'; let h = d.getHours(); const ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12; return `${d.getDate()} ${MES[d.getMonth()].slice(0, 3)}, ${h}:${pad(d.getMinutes())} ${ap}`; };
@@ -72,6 +73,7 @@
   /* ---------- Estado de la página ---------- */
   const UI = Object.assign({ obra: '', prov: '' }, (() => { try { return JSON.parse(sessionStorage.getItem('galitha.pn.ui')) || {}; } catch { return {}; } })());
   const saveUI = () => { try { sessionStorage.setItem('galitha.pn.ui', JSON.stringify(UI)); } catch { /* sin acceso */ } };
+  let verTodos = false;   // v0.19: pagos anteriores completos
   let marcadas = new Set();   // notas marcadas para pagar (se reinicia al cambiar de obra o proveedor)
 
   const vacia = (titulo, h, p) => ({ title: titulo, html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">${h}</h2><p class="muted">${p}</p></div></section>`, bind() { } });
@@ -83,7 +85,8 @@
     const ns = D.pnNotas.filter(n => ids.has(n.materialId));
     const sinPagar = ns.filter(n => !n.pagoId);
     const porPagar = sinPagar.filter(n => n.importe != null), esperan = sinPagar.filter(n => n.importe == null);
-    const pagos = D.pnPagos.filter(g => g.obraId === oid && (!prov || g.proveedorId === prov));
+    const pagos = D.pnPagos.filter(g => g.obraId === oid && (!prov || g.proveedorId === prov))
+      .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)) || String(b.creadoEn || '').localeCompare(String(a.creadoEn || '')));   // v0.19: el más reciente primero, también el mismo día
     return { ms, ns, sinPagar, porPagar, esperan, pagos, debe: porPagar.reduce((a, n) => a + n.importe, 0),
       antigua: sinPagar.map(n => n.fecha).filter(Boolean).sort()[0] || '' };
   }
@@ -140,10 +143,10 @@
         ${puedeSubir(m.obraId) ? `<button type="button" class="btn btn--sm${esResDe(m.obraId) ? ' btn--solid' : ''}" data-subir="${esc(m.id)}">${I.cam}<span>Subir nota</span></button>` : ''}
         ${of && !ns.length ? `<button type="button" class="ibtn" data-quitar-mat="${esc(m.id)}" title="Quitar de pago por notas" aria-label="Quitar de pago por notas">${I.close}</button>` : ''}</div>`;
     }).join('');
-    const historial = `<div class="fz-card"><h3>Pagos anteriores</h3>${x.pagos.length ? `<ul class="fz-mov pn-hist">${x.pagos.slice(0, 12).map(g => {
+    const historial = `<div class="fz-card"><h3>Pagos anteriores</h3>${x.pagos.length ? `<ul class="fz-mov pn-hist">${x.pagos.slice(0, verTodos ? x.pagos.length : 12).map(g => {
       const ns = D.pnNotas.filter(n => n.pagoId === g.id), suma = ns.reduce((a, n) => a + (n.importe || 0), 0), dif = Math.abs(suma - g.monto) >= 0.01;
       return `<li data-pago="${esc(g.id)}" tabindex="0"><span class="dot" style="background:var(--ok-bg);color:var(--ok)">${I.check}</span><div><b>${esc(fDate(g.fecha))}</b><small>${ns.length} ${ns.length === 1 ? 'nota' : 'notas'}${dif ? ' · <span class="pn-rojo">no coincide</span>' : ''}</small></div><span class="m">${money(g.monto)}</span></li>`;
-    }).join('')}</ul>` : '<p class="muted small">Todavía no hay pagos.</p>'}</div>`;
+    }).join('')}</ul>${x.pagos.length > 12 ? `<button type="button" class="tbtn tbtn--sm" data-ver-todos>${verTodos ? 'Ver solo los recientes' : `Ver los ${x.pagos.length} pagos`}</button>` : ''}` : '<p class="muted small">Todavía no hay pagos.</p>'}</div>`;
     const panelPago = of ? `<div class="fz-card fz-envio"><b class="pn-ptit">Pago · ${esc(o.nombre)}</b>
         ${sel.length ? `<div class="pn-sum">${sel.map(n => `<div><span>Nota ${esc(n.folio || 's/f')} · ${esc(fDate(n.fecha))}</span><span>${money(n.importe)}</span></div>`).join('')}<div class="tot"><span>${sel.length} ${sel.length === 1 ? 'nota' : 'notas'}</span><span>${money(tsel)}</span></div></div>`
           : '<p class="muted small">Marca en "Por pagar" las notas que vas a pagar.</p>'}
@@ -187,6 +190,7 @@
         on('[data-subir]', b => subirNota(b.dataset.subir));
         on('[data-pagar]', () => drPago(o, sel));
         on('[data-pago]', b => drVerPago(pago(b.dataset.pago)));
+        on('[data-ver-todos]', () => { verTodos = !verTodos; api.rerender(); });
         $$('[data-pago]', sec).forEach(li => li.addEventListener('keydown', e => { if (e.key === 'Enter') drVerPago(pago(li.dataset.pago)); }));
         on('[data-guardar]', async b => {
           const inp = $(`[data-imp="${b.dataset.guardar}"]`, sec), v = num(inp.value);
@@ -274,7 +278,8 @@
     const m = mat(materialId || (n0 && n0.materialId));
     if (!m) { toast('Ese material ya no está en pago por notas.'); return; }
     const n = n0 || { materialId: m.id, obraId: m.obraId, folio: '', fecha: today(), recibido: '', archivos: [] };
-    let nuevos = [];
+    let nuevos = [], urls = [];
+    const quitados = [];   // v0.19: fotos ya guardadas que se quitan al corregir (se borran del servidor al guardar)
     api.openPanel(`<form class="dr-form" novalidate>
       <header class="dr-h"><div><p class="mono">${esc(m.proveedor || 'Proveedor')} · ${esc(capital(m.concepto))}</p><h2 id="dr-title">${n0 ? 'Corregir nota' : 'Subir nota'}</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>
       <div class="dr-b">
@@ -291,15 +296,17 @@
     </form>`, {}, panel => {
       const f = $('form', panel), err = $('[data-err]', panel), prev = $('[data-prev]', panel);
       const pintar = () => {
+        urls.forEach(u => URL.revokeObjectURL(u)); urls = [];   // v0.19: libera las vistas previas anteriores
+        const url = x => { const u = URL.createObjectURL(x); urls.push(u); return u; };
         prev.innerHTML = [...n.archivos.map((a, i) => `<div class="pn-prev"><span class="pn-img">${/\.pdf$/i.test(a.nombre) ? '' : `<img alt="" data-ruta="${esc(a.ruta)}">`}</span><div><b>${esc(a.nombre)}</b><small>Ya guardada</small></div>${n.archivos.length + nuevos.length > 1 ? `<button type="button" class="ibtn" data-quita-v="${i}" aria-label="Quitar">${I.close}</button>` : ''}</div>`),
-          ...nuevos.map((x, i) => `<div class="pn-prev"><span class="pn-img">${x.type.startsWith('image/') ? `<img alt="" src="${URL.createObjectURL(x)}">` : ''}</span><div><b>${esc(x.name)}</b><small>${Math.round(x.size / 1024)} KB</small></div><button type="button" class="ibtn" data-quita-n="${i}" aria-label="Quitar">${I.close}</button></div>`)].join('');
+          ...nuevos.map((x, i) => `<div class="pn-prev"><span class="pn-img">${x.type.startsWith('image/') ? `<img alt="" src="${url(x)}">` : ''}</span><div><b>${esc(x.name)}</b><small>${Math.round(x.size / 1024)} KB</small></div><button type="button" class="ibtn" data-quita-n="${i}" aria-label="Quitar">${I.close}</button></div>`)].join('');
         miniaturas(prev);
       };
       pintar();
       $$('[data-file]', panel).forEach(inp => inp.addEventListener('change', () => { nuevos = [...nuevos, ...inp.files]; inp.value = ''; api.markDirty(); pintar(); }));
       prev.addEventListener('click', e => {
         const a = e.target.closest('[data-quita-n]'); if (a) { nuevos.splice(+a.dataset.quitaN, 1); pintar(); return; }
-        const b = e.target.closest('[data-quita-v]'); if (b) { n.archivos = n.archivos.filter((_, i) => i !== +b.dataset.quitaV); pintar(); }
+        const b = e.target.closest('[data-quita-v]'); if (b) { quitados.push(...n.archivos.filter((_, i) => i === +b.dataset.quitaV)); n.archivos = n.archivos.filter((_, i) => i !== +b.dataset.quitaV); pintar(); }
       });
       f.addEventListener('input', api.markDirty);
       f.addEventListener('submit', async e => {
@@ -310,6 +317,8 @@
         let id;
         try { id = await R.guardarNota(Object.assign({}, n, { folio: f.folio.value.trim(), fecha: f.fecha.value, recibido: f.recibido.value.trim() }), nuevos); }
         catch (x) { $('[data-ok]', panel).disabled = false; $('[data-ok] span', panel).textContent = n0 ? 'Guardar' : 'Subir nota'; err.textContent = x.message; return; }
+        if (quitados.length) R.borrarArchivos(quitados.map(a => a.ruta)).catch(() => {});   // solo compras y jefes borran archivos; si no, se quedan
+        urls.forEach(u => URL.revokeObjectURL(u));
         await cargar(); api.closeDrawer(true);
         toast(n0 ? 'Nota corregida.' : 'Nota subida. Compras le pondrá el importe.');
         api.rerender();
@@ -374,7 +383,8 @@
       <footer class="dr-f"><p class="dr-err" role="alert" data-err></p><button type="button" class="btn" data-close><span>Cancelar</span></button><button type="submit" class="btn btn--solid" data-ok>${I.cash}<span>Registrar pago</span></button></footer>
     </form>`, {}, panel => {
       const f = $('form', panel), err = $('[data-err]', panel), prev = $('[data-prev]', panel);
-      const pintar = () => { prev.innerHTML = comp.map((x, i) => `<div class="pn-prev"><span class="pn-img">${x.type.startsWith('image/') ? `<img alt="" src="${URL.createObjectURL(x)}">` : ''}</span><div><b>${esc(x.name)}</b><small>${Math.round(x.size / 1024)} KB</small></div><button type="button" class="ibtn" data-quita="${i}" aria-label="Quitar">${I.close}</button></div>`).join(''); };
+      let urls = [];
+      const pintar = () => { urls.forEach(u => URL.revokeObjectURL(u)); urls = []; prev.innerHTML = comp.map((x, i) => `<div class="pn-prev"><span class="pn-img">${x.type.startsWith('image/') ? `<img alt="" src="${(u => (urls.push(u), u))(URL.createObjectURL(x))}">` : ''}</span><div><b>${esc(x.name)}</b><small>${Math.round(x.size / 1024)} KB</small></div><button type="button" class="ibtn" data-quita="${i}" aria-label="Quitar">${I.close}</button></div>`).join(''); };
       const dif = () => {
         const v = num(f.monto.value), d = v == null ? 0 : v - suma, box = $('[data-dif]', panel);
         const hay = v != null && Math.abs(d) >= 0.01;

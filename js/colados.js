@@ -43,7 +43,8 @@
   };
   const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-  const today = () => ymd(new Date());
+  const FMX = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City' });
+  const today = () => FMX.format(new Date());   // v0.19: hora de la Ciudad de México, no el reloj del teléfono
   const fDate = s => { const d = toDate(s); return d ? `${d.getDate()} ${MES[d.getMonth()].slice(0, 3)}` : '—'; };
   const fDateL = s => { const d = toDate(s); return d ? `${DIA[d.getDay()]} ${d.getDate()} de ${MES[d.getMonth()]} ${d.getFullYear()}` : 'Sin fecha'; };
   const fDateT = s => {
@@ -186,6 +187,7 @@
   };
   async function guardar(c) {
     const prev = c.id && C.colados.find(x => x.id === c.id);
+    if (!c.id) c.id = R.uid();
     if (!prev || prev.semana !== c.semana || prev.anio !== c.anio) c.folio = siguienteFolio(c);
     else c.folio = prev.folio;
     if (prev) {
@@ -193,8 +195,12 @@
       if (!filas.length) throw new Error('No tienes permiso para modificar este colado.');
       return c.id;
     }
-    c.id = R.uid();
-    ok(await sb().from('colados').insert(Object.assign({ id: c.id, obra_id: c.obraId }, fila(c))).select('id'));
+    // v0.19: el id viene del formulario; si la respuesta se perdió pero sí quedó, no se crea otro
+    const r = await sb().from('colados').insert(Object.assign({ id: c.id, obra_id: c.obraId }, fila(c))).select('id');
+    if (r.error) {
+      const ya = await sb().from('colados').select('id').eq('id', c.id).maybeSingle().then(x => x, () => ({}));
+      if (!(ya && ya.data)) ok(r);
+    }
     return c.id;
   }
   async function cambiarEstado(id, estado, comentario) {
@@ -385,7 +391,7 @@
         ${c.estado === 'devuelta' && c.comentario ? `<div class="note rv" style="--d:40">${I.undo}<p><b>${esc(c.devueltaPor || 'El coordinador')} lo devolvió para corregir:</b> ${esc(c.comentario)}</p></div>` : ''}
         ${c.extraDe || c.motivo ? `<div class="note note--info rv" style="--d:40">${I.colado}<p>${c.extraDe ? `<b>Extra del colado <a class="link-u" href="#/col/${esc(c.extraDe)}">${esc(folioDe(c.extraDe))}</a>.</b> ` : ''}${c.motivo ? `<b>Motivo:</b> ${esc(c.motivo)}` : ''}</p></div>` : ''}
         ${extras.length ? `<div class="note note--info rv" style="--d:40">${I.plus}<p><b>Extras de este colado:</b> ${extras.map(x => `<a class="link-u" href="#/col/${esc(x.id)}">${esc(x.folio)}</a> (${esc(TIPO_SOL[tipoDe(x)].toLowerCase())}${x.motivo ? ', ' + esc(x.motivo) : ''} · ${esc((ESTADOS[x.estado] || {}).label || '')})`).join('; ')}</p></div>` : ''}
-        ${c.estado === 'cancelada' ? `<div class="note note--bad rv" style="--d:40">${I.alert}<p><b>Colado cancelado por ${esc(c.canceladaPor)}.</b> ${esc(c.comentario)}</p></div>` : ''}
+        ${c.estado === 'cancelada' ? `<div class="note note--bad rv" style="--d:40">${I.alert}<p><b>Colado cancelado por ${esc(c.canceladaPor)}.</b> ${esc(c.comentario)}${comprasDe(c).length && rol() !== 'consulta' ? `<br>Sigue ${comprasDe(c).length === 1 ? 'su compra' : 'con sus compras'}: ${comprasDe(c).map(x => `<a class="link-u" href="#/c/${esc(x.id)}">${esc(x.proveedor.nombre)}</a> (${x.pago ? 'pagada' : 'sin pago'})`).join(', ')}. Si no se pagó, bórrala en Compras y facturas.` : ''}</p></div>` : ''}
         <div class="c-acts rv" style="--d:50">${acts}</div>
         ${ultimo ? `<p class="k-aviso col-sec rv">${ultimo.para.every(p => p.canal === 'whatsapp') ? I.wa : I.mail}<span>Aviso ${c.estado === 'enviada' ? 'al coordinador' : 'enviado'} · ${esc(avisoPara(ultimo.para))} · ${esc(fDateT(ultimo.en))}</span></p>` : ''}
         ${seccionCotizaciones(c)}
@@ -432,7 +438,8 @@
           if (m != null && await hacer(() => cambiarEstado(c.id, 'devuelta', m), 'Colado devuelto al residente.')) { api.rerender(); avisar(c.id, 'devuelta'); }
         });
         on('[data-cancelar]', async () => {
-          const m = await api.preguntar({ titulo: 'Cancelar colado', texto: `${esc(c.folio)} · ${esc(fDateL(c.fecha))}. Si ya se pidió al proveedor, avísale a tiempo para evitar cargos.`, etiqueta: 'Motivo de la cancelación', campo: 'area', ok: 'Cancelar colado', requerido: true, peligro: true });
+          const cs = comprasDe(c);
+          const m = await api.preguntar({ titulo: 'Cancelar colado', texto: `${esc(c.folio)} · ${esc(fDateL(c.fecha))}. Si ya se pidió al proveedor, avísale a tiempo para evitar cargos.${cs.length ? `<br><br><b>Este colado ya tiene ${cs.length === 1 ? 'una compra' : cs.length + ' compras'}:</b> ${comprasTxt(cs)}. No se borran solas: habla con el proveedor y, si no se pagó, bórrala en Compras y facturas.` : ''}`, etiqueta: 'Motivo de la cancelación', campo: 'area', ok: 'Cancelar colado', requerido: true, peligro: true });
           if (m != null && await hacer(() => cambiarEstado(c.id, 'cancelada', m), 'Colado cancelado.')) { api.rerender(); avisar(c.id, 'cancelada'); }
         });
         on('[data-pedir]', () => drPedir(c));
@@ -503,7 +510,8 @@
     if (!obras.length) { toast('Solo el residente de una obra (o el coordinador) capturan colados.'); return; }
     const o0 = obras[0], res = (o0 && o0.residente) || {};
     const c = c0 ? JSON.parse(JSON.stringify(c0)) : { obraId: o0.id, fecha: '', hora: '07:00', elemento: '', ubicacion: '', concretos: [KVACIO()], extra: [],
-      bombeo: '', tuberiaM: null, alturaM: null, alcanceM: null, separacionMin: null, contacto: res.nombre || '', contactoTel: res.telefono || '', acceso: '', checklist: {}, notas: '', tipo: 'ambos', motivo: '', extraDe: '' };
+      bombeo: '', tuberiaM: null, alturaM: null, alcanceM: null, separacionMin: null, contacto: res.nombre || '', contactoTel: res.telefono || '', acceso: '', checklist: {}, notas: '', tipo: 'ambos', motivo: '', extraDe: '',
+      id: R.uid() };   // v0.19: id desde que se abre, así un reintento no duplica el colado
     c.tipo = tipoDe(c);
     const v = x => (x == null ? '' : esc(x));
     // v0.14: colados de la obra de los que esta solicitud puede ser un extra
@@ -682,8 +690,9 @@
           if (enviar) await cambiarEstado(id, 'enviada');
         } catch (x) {
           $$('.dr-f .btn', panel).forEach(b => { b.disabled = false; });
-          err.textContent = x.message;
-          if (id) await cargar();
+          await cargar();   // v0.19: si ya quedó guardado, el siguiente intento lo actualiza
+          const ya = C.colados.find(y => y.id === c.id);
+          err.textContent = ya && enviar && ['borrador', 'devuelta'].includes(ya.estado) ? `Quedó guardado (${ya.folio}), pero no se envió: ${x.message}` : x.message;
           return;
         }
         await cargar();
@@ -733,7 +742,7 @@
         <thead><tr><th>#</th><th>VOLUMEN A BOMBEAR</th><th>NOTAS</th></tr></thead>
         <tbody>${e.concretos.map((k, i) => `<tr><td>${i + 1}</td><td>${m3(k.volumen)}</td><td class="l">${esc(k.nota)}</td></tr>`).join('')}</tbody></table>`;
     $('#print').innerHTML = `<div class="pf pf--col">
-      ${c.estado === 'aprobada' ? '' : `<div class="pf-marca">${esc((ESTADOS[c.estado] || {}).label || '').toUpperCase()} · NO ENVIAR</div>`}
+      ${['aprobada', 'realizado'].includes(c.estado) ? '' : `<div class="pf-marca">${esc((ESTADOS[c.estado] || {}).label || '').toUpperCase()} · NO ENVIAR</div>`}
       <div class="pf-h"><div class="pf-logo">${api.logoSVG()}</div><div class="pf-t"><h1>${TIT[t]}</h1>
         <p><span>FOLIO: ${esc(c.folio)}</span><span>SEMANA: ${c.semana}</span></p></div></div>
       <table class="pf-kv">
@@ -774,6 +783,7 @@
   const dirProv = id => api.proveedores().find(p => p.id === id);
   const nombreProv = (id, q) => { const d = dirProv(id); return d ? api.nombreProveedor(d) : (q && q.proveedor.nombre) || 'Proveedor'; };
   const comprasDe = c => C.compras.filter(x => x.coladoId === c.id);
+  const comprasTxt = cs => cs.map(x => `${esc(x.proveedor.nombre)} (${x.pago ? 'pagada' : 'sin pago'})`).join(', ');
   const provsCompra = c => [...new Set(comprasDe(c).map(x => (x.proveedor && x.proveedor.nombre) || '').filter(Boolean))];
   // v0.12: solo se registran cotizaciones aprobadas por Dirección (quedan "elegida" y crean su compra)
   const elegidas = c => cotsDe(c).filter(q => q.estado === 'elegida');
@@ -928,10 +938,11 @@
       ok(await sb().from('colado_cotizaciones').update({ estado: 'elegida' }).eq('id', qid).select('id'));
       cid = await R.crearCompra({ obraId: c.obraId, anio: c.anio, semana: c.semana, partidas: [], fechaEntrega: c.fecha, coladoId: c.id,
         proveedor: { nombre, rfc: d.rfc || '', razonSocial: d.razonSocial || '', id: x.pid } });
+      // v0.19: se liga en cuanto existe la compra (si lo demás falla, el colado no ofrece "quitar" ni deja registrar otra)
+      ok(await sb().from('colado_cotizaciones').update({ compra_ids: [cid] }).eq('id', qid).select('id'));
       await R.cargar();
       await R.agregarDocumentoExistente(cid, 'cotizacion', { archivos: datos.archivos, fecha: today(), monto: x.total });
       if (!x.iva) await R.actualizarCompra(cid, { iva: false });
-      ok(await sb().from('colado_cotizaciones').update({ compra_ids: [cid] }).eq('id', qid).select('id'));
     } catch (e) {
       if (!cid) {   // no quedó compra: se deshace lo registrado
         if (qid) await sb().from('colado_cotizaciones').update({ estado: 'descartada' }).eq('id', qid);
