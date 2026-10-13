@@ -2274,3 +2274,24 @@ body.ft-cam-on { overflow: hidden; }
   .pn-wait > div { flex: 1 1 160px; }
   .pn-wait > .btn { margin-left: 48px; }
 }
+
+/* =========================================================
+   v0.21 · Revisión completa, parte 7 (revision/parte-7-css-celular.md)
+   ========================================================= */
+/* M1 · iPhone/iPad: todos los campos a 16 px (salvo el código de acceso) para que Safari no acerque la pantalla
+   al tocar un filtro o un buscador. La regla solo la lee Safari de iOS: en Android y en la computadora no cambia nada. */
+@supports (-webkit-touch-callout: none) {
+  input:not(.lg-code), select, textarea { font-size: 16px !important; }
+}
+/* B2 · En celular, más área para tocar sin cambiar cómo se ven */
+@media (max-width: 900px) {
+  .ck { width: 24px; height: 24px; }
+  .pn-chk::after, .chip button::after { content: ''; position: absolute; inset: -10px; }
+  .chip button { position: relative; }
+  .tbl .link-u, .le-foot .link-u { padding: 8px 6px; margin: -8px -6px; }
+}
+/* B3 · Pantallas bajas (1280×800): con "Compras" o "Fuerza de trabajo" abierto, renglones un poco más bajos
+   para que el bloque del usuario siga a la vista sin desplazar la barra lateral */
+@media (min-width: 901px) and (max-height: 820px) {
+  .side:has(.side-grp.open) .side-nav a, .side:has(.side-grp.open) .side-nav .side-sub a { height: 30px; }
+}

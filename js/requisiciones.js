@@ -869,7 +869,9 @@
         g.addEventListener('mouseenter', () => {
           const i = +g.dataset.i, x = data[i], cx = L + band * i + band / 2;
           tip.innerHTML = `<small>Semana ${x.w.semana} · ${esc(wkRange(x.w))}</small><b>${money(x.total)}</b><small>Compras: ${money(x.comp)} · ${x.n} ${x.n === 1 ? 'pago' : 'pagos'}</small>${x.caja ? `<br><small>Caja chica: ${money(x.caja)} · ${x.nk} ${x.nk === 1 ? 'gasto' : 'gastos'}</small>` : ''}${x.notas ? `<br><small>Pago por notas: ${money(x.notas)} · ${x.ng} ${x.ng === 1 ? 'pago' : 'pagos'}</small>` : ''}`;
-          tip.style.left = Math.min(Math.max(cx, 90), W - 90) + 'px'; tip.style.top = Math.max(y(x.total), T + 30) + 'px'; tip.classList.add('on');
+          // v0.21: se acomoda con su ancho real (con caja chica y notas es más ancha y se cortaba en el celular)
+          const mitad = tip.offsetWidth / 2 + 4, ancho = el.clientWidth || W;
+          tip.style.left = Math.max(mitad, Math.min(cx, ancho - mitad)) + 'px'; tip.style.top = Math.max(y(x.total), T + 30) + 'px'; tip.classList.add('on');
         });
         g.addEventListener('mouseleave', () => tip.classList.remove('on'));
       });
