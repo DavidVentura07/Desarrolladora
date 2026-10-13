@@ -86,7 +86,7 @@
             <div><b data-cnt="${c.proveedores}">0</b><small>Proveedores</small></div>
           </div>
         </div>
-        <div class="we-foot we-fx" style="--d:1100"><span>${nombre ? 'Hola, ' + esc(nombre) : ''}</span><span>v0.19 · en línea</span></div>
+        <div class="we-foot we-fx" style="--d:1100"><span>${nombre ? 'Hola, ' + esc(nombre) : ''}</span><span>v0.20 · en línea</span></div>
         <div class="we-ghost">${markSVG()}</div>
       </div>
       <div class="we-stage">
@@ -218,8 +218,9 @@
     const entrar = () => {
       if (saliendo) return; saliendo = true;
       car.parar();
-      // Una liga directa (compra, requisición, proveedor) se respeta; si no, Obras
-      if (!volver && !/^#\/(c|r|p)\//.test(location.hash) && location.hash !== '#/obras') location.hash = '#/obras';
+      // Una liga directa se respeta (v0.20: cualquiera, también las de los correos de colados, caja chica,
+      // notas y fuerza de trabajo); sin liga, o con la del inicio, Obras
+      if (!volver && /^(#\/?|#\/inicio)?$/.test(location.hash)) location.hash = '#/obras';
       root.classList.add('leave');
       open.classList.remove('out');
       open.querySelector('.curtain-mark').innerHTML = markSVG();

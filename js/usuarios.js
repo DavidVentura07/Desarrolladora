@@ -31,11 +31,17 @@
     const [p, i, o] = await Promise.all([
       sb().from('perfiles').select('*').order('nombre'),
       sb().from('invitaciones').select('*').order('creada_en', { ascending: false }),
-      sb().from('obras').select('id, nombre, residente_id, estatus')
+      sb().from('obras').select('id, nombre, residente_id, estatus, obra_suplentes(perfil_id, hasta)')
     ]);
     PERFILES = ok(p); INVITACIONES = ok(i); OBRAS = ok(o);
   }
   const obrasDe = id => OBRAS.filter(o => o.residente_id === id && o.estatus !== 'cerrada').map(o => o.nombre);
+  // v0.20: obras activas donde es titular o suplente vigente o futuro (la base no deja cambiarle el rol sin reasignarlas)
+  const hoyMX = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City' }).format(new Date());
+  const asignadoEn = id => OBRAS.filter(o => o.estatus !== 'cerrada' && (o.residente_id === id
+    || (o.obra_suplentes || []).some(s => s.perfil_id === id && String(s.hasta) >= hoyMX()))).map(o => o.nombre);
+  // v0.20: celular de 10 dígitos (acepta espacios, guiones y el 52 o 521 adelante); '' si viene vacío, null si no sirve
+  const celular = v => { let d = String(v || '').replace(/\D/g, ''); if (!d) return ''; if (/^521\d{10}$/.test(d)) d = d.slice(3); else if (/^52\d{10}$/.test(d)) d = d.slice(2); return d.length === 10 ? d : null; };
 
   async function pageUsuarios() {
     if (!esJefe()) {
@@ -44,7 +50,7 @@
     await api.refresh();
     try { await cargar(); } catch (e) { toast(e.message); }
     const conPerfil = new Set(PERFILES.map(p => p.correo.toLowerCase()));
-    const pendientes = INVITACIONES.filter(i => !conPerfil.has(i.correo));
+    const pendientes = INVITACIONES.filter(i => !conPerfil.has(String(i.correo).toLowerCase()));   // v0.20: sin distinguir mayúsculas
     const activos = PERFILES.filter(p => p.activo), inactivos = PERFILES.filter(p => !p.activo);
     const cuenta = r => activos.filter(p => p.rol === r).length;
 
@@ -150,8 +156,10 @@
         if (!MAIL_RE.test(correo)) { err.textContent = 'Escribe un correo válido.'; f.correo.classList.add('invalid'); return; }
         if (!nombre) { err.textContent = 'Escribe el nombre.'; f.nombre.classList.add('invalid'); return; }
         if (!editar && PERFILES.some(p => p.correo.toLowerCase() === correo)) { err.textContent = 'Esa persona ya tiene acceso. Búscala en la lista para cambiar su rol.'; return; }
-        if (!editar && INVITACIONES.some(i => i.correo === correo)) { err.textContent = 'Ese correo ya está invitado.'; return; }
-        const fila = { nombre, rol, telefono: f.telefono.value.trim() };
+        if (!editar && INVITACIONES.some(i => String(i.correo).toLowerCase() === correo)) { err.textContent = 'Ese correo ya está invitado.'; return; }
+        const tel = celular(f.telefono.value);
+        if (tel == null) { err.textContent = 'El celular debe tener 10 dígitos (para los avisos por WhatsApp).'; f.telefono.classList.add('invalid'); return; }
+        const fila = { nombre, rol, telefono: tel };
         try {
           if (editar) ok(await sb().from('invitaciones').update(fila).eq('correo', correo).select('correo'));
           else ok(await sb().from('invitaciones').insert(Object.assign({ correo }, fila)).select('correo'));
@@ -193,9 +201,14 @@
         e.preventDefault();
         const nombre = f.nombre.value.trim();
         if (!nombre) { err.textContent = 'Escribe el nombre.'; return; }
-        const fila = { nombre, telefono: f.telefono.value.trim() };
+        const tel = celular(f.telefono.value);
+        if (tel == null) { err.textContent = 'El celular debe tener 10 dígitos (para los avisos por WhatsApp).'; return; }
+        const fila = { nombre, telefono: tel };
         if (!yo) { fila.rol = (f.querySelector('[name="rol"]:checked') || {}).value || p.rol; fila.activo = f.activo.checked; }
-        if (!yo && p.activo && !fila.activo && !(await api.confirmar({ titulo: 'Quitar acceso', texto: `<b>${esc(nombre)}</b> ya no podrá entrar a la plataforma.`, ok: 'Quitar acceso', peligro: true }))) return;
+        const asig = asignadoEn(p.id);
+        // v0.20: un residente con obra asignada no cambia de rol hasta reasignarla (la base lo revisa igual)
+        if (!yo && p.rol === 'residente' && fila.rol !== 'residente' && asig.length) { err.textContent = `Primero asigna otro residente (o quita la suplencia) en: ${asig.join(', ')}. Después cambia su rol.`; return; }
+        if (!yo && p.activo && !fila.activo && !(await api.confirmar({ titulo: 'Quitar acceso', texto: `<b>${esc(nombre)}</b> ya no podrá entrar a la plataforma.${asig.length ? `<br><br>Es residente o suplente de <b>${esc(asig.join(', '))}</b>: asigna a otra persona en Obras para que esa obra siga teniendo quien capture.` : ''}`, ok: 'Quitar acceso', peligro: true }))) return;
         try {
           const filas = ok(await sb().from('perfiles').update(fila).eq('id', p.id).select('id'));
           if (!filas.length) throw new Error('Tu rol no puede modificar usuarios.');
@@ -210,7 +223,13 @@
   const TABLAS = {
     requisiciones: 'Requisición', partidas: 'Material', compras: 'Compra', compra_partidas: 'Material en compra', compra_documentos: 'Documento',
     obras: 'Obra', obra_suplentes: 'Suplente', proveedores: 'Proveedor', contactos: 'Contacto', listas: 'Lista', perfiles: 'Usuario',
-    invitaciones: 'Invitación', config: 'Configuración'
+    invitaciones: 'Invitación', config: 'Configuración',
+    // v0.20: las secciones que se agregaron después de la v0.8
+    obra_residentes: 'Cambio de residente', caja_chica: 'Caja chica', datos_fiscales: 'Datos fiscales',
+    colados: 'Colado', colado_cotizaciones: 'Cotización de colado', colado_listas: 'Listas de opciones',
+    trabajadores: 'Trabajador', trabajador_datos: 'Datos del trabajador (IMSS)', trabajador_movimientos: 'Movimiento de trabajador',
+    pases_lista: 'Pase de lista', asistencias: 'Asistencia', pase_fotos: 'Foto del pase de lista',
+    pn_materiales: 'Material en pago por notas', pn_notas: 'Nota (pago por notas)', pn_pagos: 'Pago por notas'
   };
   const ACC = { insert: 'Agregó', update: 'Cambió', delete: 'Borró' };
   const BF = { tabla: '', quien: '' };
@@ -223,7 +242,7 @@
     const xs = Object.entries(b.cambios || {}).filter(([k]) => !OCULTOS.includes(k));
     return `<div class="bit-cambios">${xs.slice(0, 6).map(([k, v]) => `<div><span>${esc(k.replace(/_/g, ' '))}:</span> ${esc(corto(v.antes))} → <b>${esc(corto(v.despues))}</b></div>`).join('')}${xs.length > 6 ? `<span>y ${xs.length - 6} cambios más</span>` : ''}</div>`;
   }
-  const liga = b => ({ requisiciones: '#/r/', compras: '#/c/', proveedores: '#/p/' }[b.tabla] || '') ;
+  const liga = b => ({ requisiciones: '#/r/', compras: '#/c/', proveedores: '#/p/', colados: '#/col/' }[b.tabla] || '');
 
   async function pageBitacora() {
     if (!esJefe()) return { title: 'Bitácora', html: `<section class="page"><div class="empty rv"><div class="empty-mark">${api.markSVG()}</div><h2 class="h2">Sin acceso</h2><p class="muted">Solo Dirección y el admin técnico consultan la bitácora.</p></div></section>` };

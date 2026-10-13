@@ -1584,7 +1584,8 @@
   let toastT;
   function toast(msg) {
     const t = $('.toast'); t.textContent = msg; t.classList.add('on');
-    clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 3400);
+    // v0.20: los avisos largos duran más (hasta 9 s)
+    clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), Math.min(9000, 3400 + Math.max(0, String(msg).length - 70) * 45));
   }
 
   /* =========================================================
@@ -1638,7 +1639,15 @@
   }
   async function render(r, keepScroll) {
     const fn = pages[r.page] || pageLista;
-    const out = await fn(r);
+    let out;
+    try { out = await fn(r); }
+    catch (e) {   // v0.20: sin señal (u otro error) la página avisa y deja reintentar, en vez de quedarse congelada
+      out = {
+        title: 'Sin conexión',
+        html: `<section class="page"><div class="empty rv"><div class="empty-mark">${markSVG()}</div><h2 class="h2">No se pudo cargar esta página</h2><p class="muted">${esc(N.esDeRed && N.esDeRed(e) ? 'Parece que no hay señal o internet. Revisa la conexión y vuelve a intentar.' : (N.traducir ? N.traducir(e) : '') || e.message || 'Revisa tu conexión.')}</p><button class="btn btn--solid" type="button" data-reintentar><span>Reintentar</span>${ARR}</button></div></section>`,
+        bind(sec) { $('[data-reintentar]', sec).addEventListener('click', () => rerender()); }
+      };
+    }
     const view = $('#view');
     const y = scrollY;
     view.innerHTML = out.html;
@@ -1691,6 +1700,16 @@
       r = parse();
     }
     if (busy || r.key === current) return;
+    // v0.20: con un formulario a medias, cambiar de página ("atrás", menú, una liga) pregunta antes de descartar
+    if (current !== null && document.body.classList.contains('drawer-open') && dirty) {
+      const destino = '#/' + r.key;
+      history.replaceState(null, '', location.pathname + location.search + '#/' + current);   // mientras pregunta, la dirección sigue en la página actual
+      if (!(await confirmar({ titulo: 'Descartar cambios', texto: 'Hay cambios sin guardar en el formulario. Si sales de esta página se pierden.', ok: 'Descartar y salir', peligro: true }))) return;
+      dirty = false;
+      history.replaceState(null, '', location.pathname + location.search + destino);
+      r = parse();
+      if (busy || r.key === current) return;
+    }
     const first = current === null;
     current = r.key;
     toggleMenu(false);
@@ -1774,9 +1793,6 @@
   mobileMQ.addEventListener('change', () => {
     if (wasMobile !== mobileMQ.matches) { wasMobile = mobileMQ.matches; renderResults(false); if (!mobileMQ.matches) toggleMenu(false); }
   });
-
-  // Si otra pestaña modifica los datos, se refleja aquí al volver
-  addEventListener('storage', e => { if (e.key && e.key.startsWith('galitha.directorio') && !document.body.classList.contains('drawer-open')) rerender(); });
 
   /* =========================================================
      ARRANQUE
