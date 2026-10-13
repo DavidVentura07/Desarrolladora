@@ -91,6 +91,7 @@
       const pdf = ar.find(a => /\.pdf$/i.test(a.nombre)), xml = ar.find(a => /\.xml$/i.test(a.nombre));
       return Object.assign({}, base, {
         serie: str(x.serie), folio: str(x.folio), fecha: str(x.fecha) || base.fecha, subtotal: num(x.subtotal), total: num(x.total),
+        moneda: str(x.moneda).toUpperCase() || 'MXN', tipoCambio: num(x.tipoCambio),   // v0.18: facturas en USD o EUR
         uuid: str(x.uuid).toUpperCase(), emisorRfc: str(x.emisorRfc), emisorNombre: str(x.emisorNombre),
         receptorRfc: str(x.receptorRfc).toUpperCase(), receptorNombre: str(x.receptorNombre),
         usoCfdi: str(x.usoCfdi), regimenReceptor: str(x.regimenReceptor), cpReceptor: str(x.cpReceptor), metodoPago: str(x.metodoPago), formaPago: str(x.formaPago),

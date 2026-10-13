@@ -74,7 +74,9 @@
     return `${DIA[d.getDay()]} ${d.getDate()} ${MES[d.getMonth()].slice(0, 3)}, ${h}:${pad(d.getMinutes())} ${ap}`;
   };
   const ddmmyy = s => { const d = toDate(s); return d ? `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}` : ''; };
-  const today = () => ymd(new Date());
+  // v0.18: "hoy" es el día en la Ciudad de México (como en el servidor), no el del reloj del dispositivo
+  const FMX = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City' });
+  const today = () => FMX.format(new Date());
 
   // Semana ISO (lunes a domingo). El corte del formato en papel va de lunes a sábado.
   function isoWeek(dt) {
@@ -92,7 +94,7 @@
   const wkRange = w => { const l = lunes(w.anio, w.semana), s = addDays(l, 5); return `${l.getDate()} ${MES[l.getMonth()].slice(0, 3)} – ${s.getDate()} ${MES[s.getMonth()].slice(0, 3)} ${s.getFullYear()}`; };
   // "DEL 28 AL 03 DE OCTUBRE 2026", igual que el formato en papel
   const corte = w => { const l = lunes(w.anio, w.semana), s = addDays(l, 5); return `DEL ${pad(l.getDate())} AL ${pad(s.getDate())} DE ${MES[s.getMonth()].toUpperCase()} ${s.getFullYear()}`; };
-  const hoyWk = () => isoWeek(new Date());
+  const hoyWk = () => isoWeek(toDate(today()));
 
   /* ---------- Estados de un material ---------- */
   const EST = [
@@ -170,16 +172,22 @@
     porpagar: c => !c.pago, pagado: c => !!c.pago, sinfac: c => c.iva && !!c.pago && !c.factura, recibido: c => !!c.remision,
     dif: c => diferencias(c).length > 0
   };
+  // v0.18: facturas en otra moneda (USD, EUR…): se muestran en su moneda y se convierten con el tipo de cambio del XML
+  const extranjera = f => !!(f && f.moneda && !['MXN', 'XXX'].includes(String(f.moneda).toUpperCase()));
+  const enMoneda = (n, mon) => { try { return new Intl.NumberFormat('es-MX', { style: 'currency', currency: mon && mon !== 'XXX' ? mon : 'MXN' }).format(+n || 0); } catch { return `${mon} ${(+n || 0).toFixed(2)}`; } };
+  const totalMXN = f => (extranjera(f) ? (f.tipoCambio ? f.total * f.tipoCambio : 0) : f.total);
   // Diferencias de montos o datos en una compra; se marcan en rojo (cuentan los centavos)
   const cent = v => Math.round((+v || 0) * 100);
   // v0.10: el receptor del XML ya no va en rojo: se compara con Datos fiscales (ver receptor())
   function diferencias(c) {
-    const f = c.factura, out = [];
+    const out = [];
+    // v0.18: en otra moneda la factura no se compara sola con la cotización ni con el pago (el tipo de cambio cambia)
+    const f = extranjera(c.factura) ? null : c.factura;
     if (f && c.cotizacion && c.cotizacion.monto && cent(f.total) !== cent(c.cotizacion.monto)) {
       const d = (cent(f.total) - cent(c.cotizacion.monto)) / 100;
       out.push({ doc: 'factura', txt: `La factura (${money(f.total)}) no coincide con la cotización (${money(c.cotizacion.monto)}): ${money(Math.abs(d))} ${d > 0 ? 'más' : 'menos'}.` });
     }
-    const ref = f ? f.total : c.cotizacion ? c.cotizacion.monto : 0;
+    const ref = f ? f.total : extranjera(c.factura) ? 0 : c.cotizacion ? c.cotizacion.monto : 0;
     if (c.pago && ref && cent(c.pago.monto) !== cent(ref)) {
       const d = (cent(c.pago.monto) - cent(ref)) / 100;
       out.push({ doc: 'pago', txt: `El pago (${money(c.pago.monto)}) no coincide con ${f ? 'la factura' : 'la cotización'} (${money(ref)}): ${money(Math.abs(d))} ${d > 0 ? 'más' : 'menos'}.` });
@@ -240,19 +248,24 @@
   // v0.11: compra que viene de un colado (concreto o bombeo; no lleva materiales)
   const coladoDe = c => (c.coladoId ? (D.colados || []).find(k => k.id === c.coladoId) || { id: c.coladoId, folio: 'Colado', elemento: '', ubicacion: '', volumen: 0, fecha: '' } : null);
   const m3 = n => `${Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 2 })} m³`;
-  const montoCompra = c => (c.factura ? c.factura.total : c.cotizacion ? c.cotizacion.monto : 0);
+  // En pesos: la factura (convertida con su tipo de cambio si es en otra moneda) o la cotización
+  const montoCompra = c => (c.factura && totalMXN(c.factura) ? totalMXN(c.factura) : c.cotizacion ? c.cotizacion.monto : 0);
   const montoReq = r => comprasDe(r).reduce((a, c) => a + montoCompra(c), 0);
   const seguros = s => s.pagado + s.recibido;
   const vivos = (r, s) => r.partidas.length - s.rechazado - s.nosum; // materiales que siguen en el flujo
   function findPartida(pid) { for (const r of D.requisiciones) { const p = r.partidas.find(x => x.id === pid); if (p) return p; } return null; }
 
-  // Liga con el directorio: por id (si se eligió del directorio) o por nombre
+  // Liga con el directorio: por id (si se eligió del directorio), por RFC o por nombre igual; un nombre "parecido"
+  // solo cuenta si coincide con un único proveedor (v0.18: antes podía ligar al proveedor equivocado)
   function enDirectorio(c) {
     const DIR = api.proveedores();
     if (c.proveedor.id) { const p = DIR.find(x => x.id === c.proveedor.id); if (p) return p; }
+    if (c.proveedor.rfc) { const p = DIR.find(x => x.rfc && x.rfc === c.proveedor.rfc); if (p) return p; }
     const n = norm(c.proveedor.nombre); if (!n) return null;
-    return DIR.find(p => { const a = norm(p.nombreComercial || p.razonSocial); return a && (a === n || (a.length > 3 && n.includes(a)) || (n.length > 3 && a.includes(n))); })
-      || (c.proveedor.rfc ? DIR.find(p => p.rfc && p.rfc === c.proveedor.rfc) : null) || null;
+    const nom = p => norm(p.nombreComercial || p.razonSocial);
+    const igual = DIR.find(p => nom(p) === n); if (igual) return igual;
+    const pare = DIR.filter(p => { const a = nom(p); return a && ((a.length > 3 && n.includes(a)) || (n.length > 3 && a.includes(n))); });
+    return pare.length === 1 ? pare[0] : null;
   }
   const iniciales = s => String(s || '').replace(/\(.*?\)|S\.?A\.?|C\.?V\.?|DE /gi, ' ').trim().split(/\s+/).filter(w => /^[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(w)).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '·';
   const tono = s => 't' + ([...String(s)].reduce((a, ch) => a + ch.charCodeAt(0), 0) % 5);
@@ -567,6 +580,9 @@
         // v0.12: el admin técnico borra una requisición ya enviada con todo lo que salió de ella (para pruebas o errores)
         on('[data-borrar-todo]', async () => {
           const pids = new Set(r.partidas.map(p => p.id));
+          // v0.18: con notas de pago por notas la base no deja borrar; se explica antes de pedir el folio
+          const conNotas = (D.pnMat || []).filter(m => pids.has(m.partidaId) && (D.pnNotas || []).some(x => x.materialId === m.id));
+          if (conNotas.length) { toast(`No se puede borrar: ${conNotas.length === 1 ? 'un material tiene' : conNotas.length + ' materiales tienen'} notas en Pago por notas (${conNotas.map(m => m.concepto).join(', ')}). Quita primero esas notas y sus pagos.`); return; }
           const cs = D.compras.filter(c => c.partidas.some(pid => pids.has(pid)));
           const solas = cs.filter(c => c.partidas.every(pid => pids.has(pid)));
           const ks = D.caja.filter(k => k.partidaId && pids.has(k.partidaId));
@@ -802,8 +818,11 @@
     if (!cs.length && !ks.length && !gs.length) { el.innerHTML = '<p class="muted">Aún no hay pagos registrados.</p>'; side.innerHTML = ''; return; }
     const claves = [...cs, ...ks, ...gs].map(wkKey);
     const min = Math.min(...claves), max = Math.max(wkKey(hw), ...claves);
+    // v0.18: las ÚLTIMAS 60 semanas (antes se tomaban las 60 más viejas y, con más historial, se perdía la semana en curso)
+    const wMax = { anio: Math.floor(max / 100), semana: max % 100 }, desde60 = wkAdd(wMax, -59);
+    const recorte = wkKey(desde60) > min;
     const data = [];
-    for (let w = { anio: Math.floor(min / 100), semana: min % 100 }; wkKey(w) <= max && data.length < 60; w = wkAdd(w, 1)) {
+    for (let w = recorte ? desde60 : { anio: Math.floor(min / 100), semana: min % 100 }; wkKey(w) <= max && data.length < 60; w = wkAdd(w, 1)) {
       const xs = cs.filter(c => wkKey(c) === wkKey(w)), kx = ks.filter(k => wkKey(k) === wkKey(w)), gx = gs.filter(g => wkKey(g) === wkKey(w));
       const comp = xs.reduce((a, c) => a + c.pago.monto, 0), caja = kx.reduce((a, k) => a + k.monto, 0), notas = gx.reduce((a, g) => a + g.monto, 0);
       data.push({ w, comp, caja, notas, total: comp + caja + notas, n: xs.length, nk: kx.length, ng: gx.length });
@@ -812,7 +831,7 @@
     const top = data.reduce((a, x) => (x.total > a.total ? x : a), data[0]);
     const conPago = data.filter(x => x.total > 0).length;
     side.innerHTML = `<div class="stats4">
-      <div><small>Acumulado</small><b>${money(tot)}</b></div>
+      <div><small>Acumulado${recorte ? ' · últimas 60 semanas' : ''}</small><b>${money(tot)}</b></div>
       <div><small>Promedio por semana con gasto</small><b>${money(conPago ? tot / conPago : 0)}</b></div>
       <div><small>Semana más alta</small><b>S${top.w.semana} · ${moneyK(top.total)}</b></div>
       <div><small>${hayN ? 'Caja chica y notas' : 'De caja chica'}</small><b>${money(totK)}${tot ? ` <span class="muted">· ${Math.round(totK / tot * 100)}%</span>` : ''}</b></div></div>
@@ -919,7 +938,7 @@
                 ${dir ? `<a class="link-u" href="#/p/${encodeURIComponent(dir.id)}">${I.users}Ficha en el directorio</a>` : '<span class="muted">No está en el directorio</span>'}
                 ${c.iva && fa && !selFa ? `<span>Facturar a <b>${esc(fa.nombre)}</b></span>` : ''}</p>
             </div>
-            <div class="d-money"><div class="big-money">${money(montoCompra(c))}</div><small>${f ? 'Total facturado (IVA incluido)' : 'Total de la cotización'}</small></div>
+            <div class="d-money"><div class="big-money">${money(montoCompra(c))}</div><small>${f && extranjera(f) ? `Factura en ${esc(f.moneda)}: ${esc(enMoneda(f.total, f.moneda))}${f.tipoCambio ? ` · TC ${esc(String(f.tipoCambio))}` : ' · sin tipo de cambio (se muestra la cotización)'}` : f ? 'Total facturado (IVA incluido)' : 'Total de la cotización'}</small></div>
           </div>
         </header>
 
@@ -985,8 +1004,8 @@
                   <div><dt>Pago</dt><dd>${esc(metodo(f.metodoPago))} · ${esc(forma(f.formaPago))}</dd></div>
                 </dl>
                 <div class="tablewrap tablewrap--bg"><table class="tbl ctbl"><thead><tr><th>Concepto</th><th class="num">Cantidad</th><th>Unidad</th><th class="num">P. unitario</th><th class="num">Importe</th></tr></thead>
-                <tbody>${f.conceptos.map(k => `<tr><td>${esc(k.descripcion)}</td><td class="num">${qty(k.cantidad)}</td><td>${esc(k.unidad)}</td><td class="num">${money(k.valorUnitario)}</td><td class="num">${money(k.importe)}</td></tr>`).join('')}</tbody>
-                <tfoot><tr><td colspan="4" class="num">Subtotal</td><td class="num">${money(f.subtotal)}</td></tr><tr><td colspan="4" class="num">IVA y otros</td><td class="num">${money(f.total - f.subtotal)}</td></tr><tr><td colspan="4" class="num">Total</td><td class="num">${money(f.total)}</td></tr></tfoot></table></div>
+                <tbody>${f.conceptos.map(k => `<tr><td>${esc(k.descripcion)}</td><td class="num">${qty(k.cantidad)}</td><td>${esc(k.unidad)}</td><td class="num">${esc(enMoneda(k.valorUnitario, f.moneda))}</td><td class="num">${esc(enMoneda(k.importe, f.moneda))}</td></tr>`).join('')}</tbody>
+                <tfoot><tr><td colspan="4" class="num">Subtotal</td><td class="num">${esc(enMoneda(f.subtotal, f.moneda))}</td></tr><tr><td colspan="4" class="num">IVA y otros</td><td class="num">${esc(enMoneda(f.total - f.subtotal, f.moneda))}</td></tr><tr><td colspan="4" class="num">Total</td><td class="num">${esc(enMoneda(f.total, f.moneda))}</td></tr>${extranjera(f) && f.tipoCambio ? `<tr><td colspan="4" class="num">En pesos (TC ${esc(String(f.tipoCambio))})</td><td class="num">${money(totalMXN(f))}</td></tr>` : ''}</tfoot></table></div>
               </div>
             </section>` : ''}
           </div>
@@ -1053,7 +1072,7 @@
         const gv = $('[data-guardar]', sec);
         if (gv) gv.addEventListener('click', async () => {
           gv.disabled = true;
-          if (subiendo) { toast('Terminando de subir…'); if (!(await subiendo)) { gv.disabled = false; return; } }
+          if (enCurso.size) { toast('Terminando de subir…'); const rs = await Promise.all([...enCurso]); if (rs.some(x => !x)) { gv.disabled = false; return; } }
           toast('✓ Todo quedó guardado.');
           location.hash = '#/compras';
         });
@@ -1115,7 +1134,8 @@
       : x.tipo === 'otra' ? ['meh', `A nombre de ${x.razon.nombre} (${x.razon.rfc}); se pidió a ${x.pedida.nombre}.`]
       : ['meh', `El receptor ${x.nombre ? x.nombre + ' ' : ''}(${x.rfc}) no está en Datos fiscales.`]);
     if (f.uuid) out.push(['ok', 'UUID único: el servidor no permite registrar la misma factura dos veces.']);
-    if (c.cotizacion && c.cotizacion.monto) {
+    if (extranjera(f)) out.push(['meh', `Factura en ${f.moneda}${f.tipoCambio ? ` (tipo de cambio ${f.tipoCambio}: ≈ ${money(totalMXN(f))})` : ' sin tipo de cambio'}. Compárala a mano con la cotización y el pago.`]);
+    else if (c.cotizacion && c.cotizacion.monto) {
       const d = Math.round((f.total - c.cotizacion.monto) * 100) / 100;
       out.push(d === 0 ? ['ok', 'El total coincide al centavo con la cotización.'] : ['no', `El total difiere ${money(Math.abs(d))} de la cotización (${d > 0 ? 'más caro' : 'más barato'}).`]);
     }
@@ -1150,7 +1170,10 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     fp.onchange = () => { if (fp.files.length) recibirArchivo(cid, k, rem ? [...fp.files] : fp.files[0]); };
     fp.click();
   }
-  let subiendo = null;   // subida en curso ("Guardar y volver" la espera)
+  // Subidas en curso ("Guardar y volver" las espera todas; v0.18: antes solo la última)
+  const enCurso = new Set();
+  const seguir = p => { enCurso.add(p); p.finally(() => enCurso.delete(p)); return p; };
+  let subiendo = null;
   async function recibirArchivo(cid, k, file) {
     const files = Array.isArray(file) ? file : [file];
     file = files[0];
@@ -1159,7 +1182,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     if (k === 'rem+') {
       if (!c.remision) return;
       toast(files.length > 1 ? `Subiendo ${files.length} fotos…` : `Subiendo "${file.name}"…`);
-      subiendo = hacer(() => R.agregarArchivos(c.remision.docId, files), files.length > 1 ? `${files.length} fotos agregadas a la remisión.` : 'Foto agregada a la remisión.');
+      subiendo = seguir(hacer(() => R.agregarArchivos(c.remision.docId, files), files.length > 1 ? `${files.length} fotos agregadas a la remisión.` : 'Foto agregada a la remisión.'));
       const ok = await subiendo;
       subiendo = null;
       if (ok) api.rerender();
@@ -1167,12 +1190,12 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     }
     let datos = {}, monto = null, referencia = '';
     if (k === 'cot') {
-      const m = await api.preguntar({ titulo: 'Total de la cotización', texto: esc(file.name), etiqueta: 'Total con IVA', campo: 'numero', ok: 'Subir', requerido: true });
+      const m = await api.preguntar({ titulo: 'Total de la cotización', texto: esc(file.name), etiqueta: 'Total con IVA, en pesos (si viene en dólares o euros, conviértelo al tipo de cambio del día)', campo: 'numero', ok: 'Subir', requerido: true });
       if (m == null) return;
       monto = parseFloat(m) || 0;
     }
     if (k === 'pago') {
-      const m = await api.preguntar({ titulo: 'Monto pagado', texto: esc(file.name), etiqueta: 'Monto del comprobante', campo: 'numero', valor: c.factura ? String(c.factura.total) : c.cotizacion ? String(c.cotizacion.monto) : '', ok: 'Subir', requerido: true });
+      const m = await api.preguntar({ titulo: 'Monto pagado', texto: esc(file.name), etiqueta: 'Monto del comprobante (en pesos)', campo: 'numero', valor: montoCompra(c) ? String(Math.round(montoCompra(c) * 100) / 100) : '', ok: 'Subir', requerido: true });
       if (m == null) return;
       monto = parseFloat(m) || 0; referencia = 'Transferencia';
     }
@@ -1187,7 +1210,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     }
     const tipo = { cot: 'cotizacion', pago: 'pago', rem: 'remision' }[k];
     toast(files.length > 1 ? `Subiendo ${files.length} archivos…` : `Subiendo "${file.name}"…`);
-    subiendo = hacer(() => R.agregarDocumento(cid, tipo, { archivos: files, fecha: today(), monto, referencia, datos }));
+    subiendo = seguir(hacer(() => R.agregarDocumento(cid, tipo, { archivos: files, fecha: today(), monto, referencia, datos })));
     const ok = await subiendo;
     subiendo = null;
     if (!ok) return;
@@ -1222,7 +1245,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     const a = (el, k) => (el && el.getAttribute(k)) || '';
     const n = v => Math.round(parseFloat(v || 0) * 100) / 100;
     return {
-      serie: a(c, 'Serie'), folio: a(c, 'Folio'), fecha: a(c, 'Fecha'), subtotal: n(a(c, 'SubTotal')), total: n(a(c, 'Total')), moneda: a(c, 'Moneda'),
+      serie: a(c, 'Serie'), folio: a(c, 'Folio'), fecha: a(c, 'Fecha'), subtotal: n(a(c, 'SubTotal')), total: n(a(c, 'Total')), moneda: a(c, 'Moneda').toUpperCase(),
+      tipoCambio: parseFloat(a(c, 'TipoCambio')) || 0,   // v0.18: facturas en USD o EUR (p. ej. elevadores)
       formaPago: a(c, 'FormaPago'), metodoPago: a(c, 'MetodoPago'), tipo: a(c, 'TipoDeComprobante'), version: a(c, 'Version'),
       emisorRfc: a(e, 'Rfc'), emisorNombre: a(e, 'Nombre'), receptorRfc: a(r, 'Rfc'), receptorNombre: a(r, 'Nombre'), usoCfdi: a(r, 'UsoCFDI'),
       regimenReceptor: a(r, 'RegimenFiscalReceptor'), cpReceptor: a(r, 'DomicilioFiscalReceptor'),   // CFDI 4.0 (v0.10: para Datos fiscales)
@@ -1231,6 +1255,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     };
   }
   const mismoNombre = (a, b) => { const x = norm(a).split(/\s+/)[0], y = norm(b); return x.length > 2 && y.includes(x); };
+  // v0.18: solo las facturas de ingreso (I) se registran como factura de una compra
+  const TIPO_CFDI = { E: 'una nota de crédito (Egreso)', P: 'un complemento de pago (Pago)', T: 'un comprobante de traslado', N: 'un recibo de nómina' };
 
   // Encabezado y pie de los paneles del módulo (el panel lateral lo pone la app)
   const drHead = (sub, title) => `<header class="dr-h"><div><p class="mono">${sub}</p><h2 id="dr-title">${title}</h2></div><button type="button" class="ibtn" data-close aria-label="Cerrar">${I.close}</button></header>`;
@@ -1275,18 +1301,24 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
         xmlFile = file;
         file.text().then(t => {
           try { parsed = parseCFDI(t); } catch (x) { parsed = null; res.innerHTML = `<p class="warn">${I.alert}${esc(x.message)}</p>`; upd(); return; }
+          if (parsed.tipo && parsed.tipo !== 'I') {
+            res.innerHTML = `<p class="warn">${I.alert}<span>Este XML es ${esc(TIPO_CFDI[parsed.tipo] || 'un comprobante de tipo ' + parsed.tipo)}, no una factura. Como factura de la compra solo se registra el CFDI de <b>Ingreso</b> (tipo I).${parsed.tipo === 'P' ? ' El complemento de pago guárdalo con el comprobante de pago.' : ''}</span></p>`;
+            parsed = null; upd(); return;
+          }
+          const ext = extranjera(parsed);
           const dup = D.compras.find(c => c.factura && c.factura.uuid && c.factura.uuid === parsed.uuid);
           const reg = fiscalRfc(parsed.receptorRfc);   // v0.10: se compara con Datos fiscales
           res.innerHTML = `<ul class="checks">
               <li class="ok">${I.okc}<span>CFDI ${esc(parsed.version)} leído: ${parsed.conceptos.length} conceptos.</span></li>
               ${fiscales().length ? `<li class="${reg ? 'ok' : 'meh'}">${I[reg ? 'okc' : 'alert']}<span>${reg ? 'A nombre de ' + esc(reg.nombre) + ' (registrada en Datos fiscales)' : 'El receptor ' + esc(parsed.receptorNombre) + ' (' + esc(parsed.receptorRfc) + ') no está en Datos fiscales; se puede agregar después desde la compra.'}</span></li>` : ''}
               <li class="${dup ? 'no' : 'ok'}">${I[dup ? 'x' : 'okc']}<span>${dup ? 'Este UUID ya está registrado (' + esc(dup.proveedor.nombre) + ', S' + dup.semana + ').' : 'UUID nuevo.'}</span></li>
+              ${ext ? `<li class="meh">${I.alert}<span>Factura en <b>${esc(parsed.moneda)}</b>${parsed.tipoCambio ? ` con tipo de cambio <b>${esc(String(parsed.tipoCambio))}</b> (≈ ${money(parsed.total * parsed.tipoCambio)})` : ' sin tipo de cambio en el XML'}. Las diferencias contra la cotización y el pago no se calculan solas: revísalas a mano.</span></li>` : ''}
             </ul>
             <dl class="dl dl--fac">
               <div><dt>Proveedor</dt><dd>${esc(parsed.emisorNombre)} <span class="mono muted">${esc(parsed.emisorRfc)}</span></dd></div>
               <div><dt>Folio</dt><dd>${esc(parsed.serie + ' ' + parsed.folio)} · ${esc(fDateT(parsed.fecha))}</dd></div>
               <div><dt>UUID</dt><dd class="mono">${esc(parsed.uuid)}</dd></div>
-              <div><dt>Total</dt><dd><b>${money(parsed.total)}</b> <span class="muted">(subtotal ${money(parsed.subtotal)})</span></dd></div>
+              <div><dt>Total</dt><dd><b>${enMoneda(parsed.total, parsed.moneda)}</b> <span class="muted">(subtotal ${enMoneda(parsed.subtotal, parsed.moneda)})</span></dd></div>
               <div><dt>Conceptos</dt><dd>${parsed.conceptos.slice(0, 6).map(k => esc(k.descripcion) + ' <span class="muted">· ' + qty(k.cantidad) + ' ' + esc(k.unidad) + '</span>').join('<br>')}${parsed.conceptos.length > 6 ? '<br><span class="muted">y ' + (parsed.conceptos.length - 6) + ' más</span>' : ''}</dd></div>
             </dl>`;
           if (dup) parsed = null;
@@ -1301,6 +1333,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
       form.addEventListener('submit', async e => {
         e.preventDefault();
         const c = compra(sel.value); if (!c || !parsed) return;
+        if (extranjera(parsed) && !(await api.confirmar({ titulo: `Factura en ${esc(parsed.moneda)}`, texto: `El total es <b>${esc(enMoneda(parsed.total, parsed.moneda))}</b>${parsed.tipoCambio ? ` (tipo de cambio ${esc(String(parsed.tipoCambio))}, ≈ ${esc(money(parsed.total * parsed.tipoCambio))})` : ''}. La cotización de la compra es de ${esc(money(c.cotizacion ? c.cotizacion.monto : 0))}. Las diferencias no se marcan solas: revísalas con el proveedor.`, ok: 'Guardar factura' }))) return;
         const pdf = $('[data-pdfin]', panel).files[0];
         ocupado(panel, true, 'Subiendo…');
         try {
@@ -1330,7 +1363,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
       <div class="dr-b">
         <fieldset class="fs"><legend><span class="mono">1</span>Proveedor y monto</legend><div class="fs-b"><div class="grid2">
           <label class="fld fld--wide"><span class="fld-l">Proveedor <em>*</em></span><input class="in" name="prov" list="dl-prov" required placeholder="Escribe o elige del directorio"><datalist id="dl-prov">${nombres.map(n => `<option value="${esc(n)}">`).join('')}</datalist></label>
-          <label class="fld"><span class="fld-l">Total con IVA <em>*</em></span><input class="in" name="monto" type="number" min="0" step="0.01" required></label>
+          <label class="fld"><span class="fld-l">Total con IVA, en pesos <em>*</em></span><input class="in" name="monto" type="number" min="0" step="0.01" required><span class="fld-h">Si la cotización viene en dólares o euros, conviértela al tipo de cambio del día.</span></label>
           <label class="fld"><span class="fld-l">Entrega programada</span><input class="in" name="ent" type="date" value="${esc(rr.fechaSuministro)}"><span class="fld-h">Para toda la factura; se puede ajustar por material.</span></label>
           ${D.fiscalListo && D.fiscal.length > 1 ? `<label class="fld fld--wide"><span class="fld-l">Facturar a</span><select class="in" name="fa">${D.fiscal.map(x => `<option value="${esc(x.id)}"${x.predeterminada ? ' selected' : ''}>${esc(x.nombre)} · ${esc(x.rfc)}</option>`).join('')}</select><span class="fld-h">Razón social que le darás al proveedor para la factura. Se puede cambiar en la compra.</span></label>` : ''}
           <label class="fld fld--wide"><span class="fld-l">Archivo de la cotización (PDF o foto)</span><input class="in" name="arch" type="file" accept="application/pdf,image/*"></label>
@@ -1503,7 +1536,12 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
     </form>`, { wide: true }, panel => {
       const form = $('form', panel), rows = $('.prows', panel);
       form.addEventListener('input', api.markDirty);
-      const semanaDe = () => { const n = parseInt(form.semana.value, 10); return { anio: w.anio, semana: n >= 1 && n <= 53 ? n : w.semana }; };
+      // v0.18: en el cambio de año, pasar de la semana 52/53 a la 1 es el año siguiente (y al revés), como en "Mover de semana"
+      const semanaDe = () => {
+        const n = parseInt(form.semana.value, 10);
+        if (!(n >= 1 && n <= 53)) return { anio: w.anio, semana: w.semana };
+        return { anio: n - w.semana > 26 ? w.anio - 1 : w.semana - n > 26 ? w.anio + 1 : w.anio, semana: n };
+      };
       const renum = () => {
         $$('.prow', rows).forEach((x, i) => { x.querySelector('i').textContent = i + 1; });
         const n = $$('.prow', rows).length;
@@ -1512,7 +1550,7 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
       };
       const tipoH = () => {
         const oid = form.obra.value, ww = semanaDe();
-        $('[data-corte]', panel).textContent = 'Corte ' + wkRange(ww);
+        $('[data-corte]', panel).textContent = 'Corte ' + wkRange(ww);   // wkRange ya trae el año
         const ya = ordinariaExiste(oid, ww);
         $('[data-tipo-h]', panel).textContent = ya ? 'Esta obra ya tiene su requisición ordinaria esa semana: la nueva será extraordinaria.' : '';
         if (nueva && ya) form.tipo.value = 'extraordinaria';
@@ -1563,7 +1601,9 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
         const datos = nueva
           ? (() => {
             const o = obra(form.obra.value), ww = semanaDe(), tipo = form.tipo.value;
-            const ext = D.requisiciones.filter(x => x.obraId === o.id && x.anio === ww.anio && x.semana === ww.semana && x.tipo === 'extraordinaria').length;
+            // v0.18: el número más alto que ya existe + 1 (contar repetía folios si se borraba una extraordinaria)
+            const ext = D.requisiciones.filter(x => x.obraId === o.id && x.anio === ww.anio && x.semana === ww.semana && x.tipo === 'extraordinaria')
+              .reduce((mx, x) => Math.max(mx, +((/-E(\d+)$/.exec(x.folio) || [])[1] || 0)), 0);
             return { obraId: o.id, anio: ww.anio, semana: ww.semana, tipo, folio: `${o.clave || 'OBRA'}-S${ww.semana}${tipo === 'extraordinaria' ? '-E' + (ext + 1) : ''}`, fechaSuministro: form.fsum.value, nota: '' };
           })()
           : Object.assign({}, r, { fechaSuministro: form.fsum.value, tipo: form.tipo.value });
@@ -1786,7 +1826,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
           <p class="fld-h">Por enfermedad o ausencia: el suplente puede crear y enviar requisiciones de esta obra solo entre las fechas indicadas. El acceso vence solo.</p>
           <ul class="sup-list">${x.suplentes.length ? x.suplentes.map(s => `<li class="${s.hasta < h ? 'is-off' : ''}"><span><b>${esc(s.nombre)}</b> · ${esc(fDate(s.desde))} al ${esc(fDate(s.hasta))}${s.hasta < h ? ' · vencida' : s.desde > h ? ' · programada' : ' · vigente'}${s.motivo ? `<small>${esc(s.motivo)}</small>` : ''}</span><button type="button" class="ibtn" data-sup-x="${esc(s.id)}" aria-label="Quitar suplencia">${I.trash}</button></li>`).join('') : '<li class="muted">Sin suplencias.</li>'}</ul>
           <div class="grid2 sup-add">
-            <label class="fld fld--wide"><span class="fld-l">Suplente</span><select class="in" name="sperfil"><option value="">Elige a una persona…</option>${personas.filter(p => p.id !== x.residenteId).map(p => `<option value="${esc(p.id)}">${nom(p)}</option>`).join('')}</select></label>
+            <label class="fld fld--wide"><span class="fld-l">Suplente</span><select class="in" name="sperfil"><option value="">Elige a un residente…</option>${personas.filter(p => p.rol === 'residente' && p.id !== x.residenteId).map(p => `<option value="${esc(p.id)}">${nom(p)}</option>`).join('')}</select>
+              <span class="fld-h">Solo residentes: el suplente tiene los permisos de residente en esta obra (el coordinador y los jefes ya los tienen).</span></label>
             <label class="fld"><span class="fld-l">Desde</span><input class="in" type="date" name="sdesde" value="${esc(h)}"></label>
             <label class="fld"><span class="fld-l">Hasta</span><input class="in" type="date" name="shasta"></label>
             <label class="fld fld--wide"><span class="fld-l">Motivo</span><input class="in" name="smotivo" placeholder="Incapacidad, vacaciones…"></label>
@@ -2339,7 +2380,8 @@ Al recibir cada olla, sube la foto de su remisión firmada en la plataforma.`;
       ? D.requisiciones.filter(r => r.estado === 'enviada').length
       : D.requisiciones.filter(r => r.anio === hw.anio && r.semana === hw.semana && visibleObra(r.obraId)).length;
     $$('[data-rcount="req"]').forEach(el => { el.textContent = n || ''; el.title = esCoord() ? 'Por revisar' : 'Esta semana'; });
-    $$('[data-rcount="pend"]').forEach(el => { el.textContent = esCompras() ? D.compras.filter(c => c.factura && !c.pago).length || '' : ''; });
+    // v0.18: compras por pagar (con cotización y sin pago); antes contaba "facturadas sin pago", el flujo de antes de la v0.10
+    $$('[data-rcount="pend"]').forEach(el => { el.textContent = esCompras() ? D.compras.filter(c => c.cotizacion && !c.pago).length || '' : ''; el.title = 'Por pagar'; });
   }
 
   return {
